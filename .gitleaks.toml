@@ -4,16 +4,27 @@
 # `secrets` job (full history). Everything is the default rule set; the
 # allowlist below is the only local decision.
 #
-# .env.example is a template: every value is empty by construction, and
-# CI would catch a real value there like any other file. The default
-# generic-api-key rule reads `AUTH_SECRET=` followed by the next line's
-# key name as key=value across the newline, which is a false positive on
-# any two adjacent *_SECRET= keys. Allowlisting the path is narrower than
-# disabling the rule.
+# The default generic-api-key rule reads `AUTH_SECRET=` followed by the
+# next line's `ARGON2_SECRET=` as a key/value pair across the newline, so
+# any two adjacent, empty *_SECRET= keys (the shape of .env.example) are
+# reported as a leak whose "secret" is the second key's name.
+#
+# The allowlist is scoped to that exact shape, not to a file: it applies
+# to the one rule, and only when the matched secret is an upper-case env
+# key name with a trailing `=`. A real value in the template or anywhere
+# else (hex, upper-case hex, base64, a URL with a password) still fails
+# the scan. Verified against those shapes when this file was added.
+#
+# Path-based allowlisting was rejected: in this gitleaks version a path
+# match alone allowlists the finding even with matchCondition = "AND",
+# which would have let a real value into the template unnoticed.
 
 [extend]
 useDefault = true
 
-[[allowlists]]
-description = "the env template has no values by construction"
-paths = ['''^\.env\.example$''']
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+description = "the matched secret is the next line's env key name"
+regexTarget = "secret"
+regexes = ['''^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+=$''']
