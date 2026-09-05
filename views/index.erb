@@ -90,6 +90,14 @@
 <dl>
   <dt>Signed in as</dt><dd><%= @account[:email] %></dd>
   <dt>Account id</dt><dd><code><%= @account[:id] %></code></dd>
-  <dt>External id</dt><dd><code><%= @account[:external_id] || '—' %></code></dd>
+  <dt>External id</dt>
+  <dd>
+    <% url = colonel_customer_url(@account[:external_id]) %>
+    <% if url %>
+      <a href="<%= url %>"><code><%= @account[:external_id] %></code></a>
+    <% else %>
+      <code><%= @account[:external_id] || '—' %></code>
+    <% end %>
+  </dd>
   <dt>Environment</dt><dd><%= RodauthAdmin::Env.rack_env %></dd>
 </dl>

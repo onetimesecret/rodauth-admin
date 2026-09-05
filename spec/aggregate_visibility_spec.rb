@@ -144,6 +144,21 @@ RSpec.describe RodauthAdmin::App do
       expect(last_response.body).to include('CHARTER &sect;7')
     end
 
+    it "deep-links the operator's own external id when the colonel console is configured" do
+      allow(RodauthAdmin::Env).to receive(:colonel_console_url).and_return('https://console.example.com')
+      sign_in_operator!
+      visit_stats
+      expect(last_response.body).to include('href="https://console.example.com/colonel/customers/extid-op-1"')
+    end
+
+    it "renders the operator's external id as plain text without a colonel console" do
+      allow(RodauthAdmin::Env).to receive(:colonel_console_url).and_return(nil)
+      sign_in_operator!
+      visit_stats
+      expect(last_response.body).to include('extid-op-1')
+      expect(last_response.body).not_to include('/colonel/customers/')
+    end
+
     it 'renders an explanatory panel, still 200, when the authdb is unreachable' do
       sign_in_operator!
       allow(RodauthAdmin::Stats).to receive(:cached).and_return(unavailable_stats)
