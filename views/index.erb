@@ -1,0 +1,8 @@
+<h2>Heartbeat</h2>
+<p>Signed in with a production account, second factor verified, allowlisted. Phase 1 exit criterion.</p>
+<dl>
+  <dt>Operator</dt><dd><%= @account[:email] %></dd>
+  <dt>Account id</dt><dd><code><%= @account[:id] %></code></dd>
+  <dt>External id</dt><dd><code><%= @account[:external_id] || '—' %></code></dd>
+  <dt>Environment</dt><dd><%= RodauthAdmin::Env.rack_env %></dd>
+</dl>

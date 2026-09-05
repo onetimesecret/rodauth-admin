@@ -1,0 +1,45 @@
+# .github/workflows/ci.yml
+---
+name: CI
+
+# Lint, tryouts, and RSpec against scratch SQLite databases (the authdb is
+# built from the rodauth-tools templates in spec_helper; nothing external).
+# A PostgreSQL lane for the grant files is Phase 2 work.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main, develop, 'feature/*', 'fix/*', 'rel/*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+      - run: bundle exec rubocop --parallel
+
+  test:
+    runs-on: ubuntu-latest
+    env:
+      RACK_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+      - name: Tryouts
+        run: bundle exec try --agent try/
+      - name: RSpec
+        run: bundle exec rspec --format progress

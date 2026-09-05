@@ -1,0 +1,186 @@
+# spec/front_door_spec.rb
+#
+# frozen_string_literal: true
+
+require_relative 'spec_helper'
+
+# Phase 1 exit criterion: an operator signs in with their production account,
+# completes TOTP, is allowlisted, and sees the heartbeat. Everything else
+# here is the set of doors that must stay shut.
+RSpec.describe RodauthAdmin::App do
+  def app = RodauthAdmin::App
+
+  let(:email) { 'operator@example.com' }
+  let(:password) { 'correct horse battery staple' }
+  let!(:account_id) { create_account(email: email, password: password, external_id: 'extid-op-1') }
+
+  def allowlist!(id = account_id)
+    RodauthAdmin::Allowlist.add!(account_id: id, email: email, actor: 'spec', reason: 'test fixture')
+  end
+
+  # Roda's route_csrf plugin issues per-path tokens; a real browser gets one
+  # from the rendered form, so the specs do the same.
+  def hidden_field(body, name)
+    body[/name="#{name}"[^>]*value="([^"]+)"/, 1] || body[/value="([^"]+)"[^>]*name="#{name}"/, 1]
+  end
+
+  def form_post(path, params = {})
+    get path
+    token = hidden_field(last_response.body, '_csrf')
+    expect(token).not_to be_nil, "no CSRF token on GET #{path} (status #{last_response.status})"
+    post path, params.merge(_csrf: token)
+  end
+
+  def login!(login = email, passwd = password)
+    form_post '/login', login: login, password: passwd
+  end
+
+  # Rodauth's otp-setup form carries the provisioning secret (what the
+  # authenticator app gets from the QR) and, with otp_keys_use_hmac?, the
+  # raw secret that is what actually lands in account_otp_keys. Codes are
+  # computed from the provisioning secret. Returns it for later sign-ins.
+  def complete_otp_setup!
+    get '/otp-setup'
+    expect(last_response.status).to eq(200)
+    body = last_response.body
+    secret = hidden_field(body, 'otp_secret')
+    raw = hidden_field(body, 'otp_raw_secret')
+    token = hidden_field(body, '_csrf')
+    expect(secret).not_to be_nil
+    params = { otp_secret: secret, otp: ROTP::TOTP.new(secret).now, password: password, _csrf: token }
+    params[:otp_raw_secret] = raw if raw
+    post '/otp-setup', params
+    expect(last_response).to be_redirect, "otp-setup failed: #{last_response.status}"
+    secret
+  end
+
+  it 'redirects anonymous requests to the login form' do
+    get '/'
+    expect(last_response).to be_redirect
+    expect(last_response.location).to end_with('/login')
+  end
+
+  it 'answers the liveness probe without authentication' do
+    get '/healthz'
+    expect(last_response.status).to eq(200)
+    body = JSON.parse(last_response.body)
+    expect(body['status']).to eq('ok')
+    expect(body['checks']).to eq('app' => 'ok', 'readonly' => 'ok')
+  end
+
+  it 'turns away a valid production account that is not allowlisted, and records it' do
+    login!
+    expect(last_response).to be_redirect
+    expect(last_response.location).to end_with('/login')
+    get '/login'
+    expect(last_response.body).to include('not an operator')
+
+    denied = actions('login_denied').last
+    expect(denied[:actor]).to eq(email)
+    expect(denied[:actor_account_id]).to eq(account_id)
+    expect(denied[:reason]).to eq('session')
+
+    get '/'
+    expect(last_response).to be_redirect
+    expect(last_response.location).to end_with('/login'), 'session must be torn down'
+  end
+
+  it 'rejects a wrong password without touching the admin audit trail' do
+    allowlist!
+    before = actions.size
+    login!(email, 'nope')
+    expect(last_response.status).to eq(401)
+    expect(actions.size).to eq(before)
+    expect(authdb[:account_login_failures].where(id: account_id).get(:number)).to eq(1)
+  end
+
+  it 'refuses unverified accounts even when allowlisted' do
+    unverified = create_account(email: 'new@example.com', password: password, status_id: 1)
+    RodauthAdmin::Allowlist.add!(account_id: unverified, email: 'new@example.com', actor: 'spec', reason: 'fixture')
+    before = actions.size
+    login!('new@example.com')
+    expect(last_response.status).to eq(403)
+    expect(actions.size).to eq(before)
+  end
+
+  it 'requires TOTP setup before an allowlisted operator sees anything' do
+    allowlist!
+    login!
+    expect(last_response).to be_redirect
+    expect(actions('login').last[:actor]).to eq(email)
+
+    get '/'
+    expect(last_response).to be_redirect
+    expect(last_response.location).to end_with('/otp-setup')
+
+    complete_otp_setup!
+    get '/'
+    expect(last_response.status).to eq(200)
+    expect(last_response.body).to include('Heartbeat')
+    expect(last_response.body).to include(email)
+    expect(last_response.body).to include('extid-op-1')
+  end
+
+  it 'writes the OTP key to the production-shaped table, HMAC-protected, and tags the auth log' do
+    allowlist!
+    login!
+    secret = complete_otp_setup!
+
+    stored = authdb[:account_otp_keys].where(id: account_id).get(:key)
+    expect(stored).not_to be_nil
+    expect(stored).not_to eq(secret), 'otp_keys_use_hmac? must be on, matching the tenant app'
+
+    messages = authdb[:account_authentication_audit_logs].where(account_id: account_id).select_map(:message)
+    expect(messages).to include('rodauth-admin: login')
+    expect(messages).to all(start_with('rodauth-admin: '))
+  end
+
+  it 'asks for the code on the next sign-in and records both factors' do
+    allowlist!
+    login!
+    secret = complete_otp_setup!
+    form_post '/logout'
+    expect(actions('logout').last[:actor]).to eq(email)
+
+    # Rodauth refuses a code from a time step already used (setup consumed
+    # the current one) and checks that against the database clock, so
+    # Timecop cannot help: backdate the stored last_use instead.
+    authdb[:account_otp_keys].where(id: account_id).update(last_use: Time.now - 120)
+
+    login!
+    expect(last_response).to be_redirect
+    get '/'
+    expect(last_response).to be_redirect
+    expect(last_response.location).to end_with('/otp-auth'), 'password alone must not open the door'
+
+    form_post '/otp-auth', otp: ROTP::TOTP.new(secret).now
+    expect(last_response).to be_redirect
+    expect(actions('two_factor_auth').last[:actor_account_id]).to eq(account_id)
+
+    get '/'
+    expect(last_response.status).to eq(200)
+  end
+
+  it 'ends the session on the next request after the allowlist row is removed' do
+    allowlist!
+    login!
+    complete_otp_setup!
+    get '/'
+    expect(last_response.status).to eq(200)
+
+    RodauthAdmin::Allowlist.remove!(account_id: account_id, actor: 'spec', reason: 'offboarding')
+    get '/'
+    expect(last_response).to be_redirect
+    expect(last_response.location).to end_with('/login')
+    expect(actions('operator_remove').last[:target]).to eq(email)
+  end
+
+  it 'locks the shared identity after five bad passwords, same as the tenant app' do
+    allowlist!
+    5.times { login!(email, 'wrong') }
+    expect(authdb[:account_lockouts].where(id: account_id).count).to eq(1)
+    login!
+    expect(last_response.status).to eq(403)
+    expect(last_response.body).to include('locked out')
+  end
+end
