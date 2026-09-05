@@ -76,6 +76,27 @@ else
   ENV['ADMIN_DATABASE_URL_MIGRATIONS'] = ENV.fetch('ADMIN_DATABASE_URL')
 end
 
+# The override turns the guard off wholesale, so it says so, loudly, every
+# time. bin/ci strips it unless the caller set it on the command line of a
+# RACK_ENV=test invocation.
+if ScratchGuard.override?(ENV)
+  warn <<~BANNER
+    ****************************************************************
+    #{ScratchGuard::DESTRUCTIVE_OVERRIDE}=1 is set.
+
+    The scratch-database guard is DISABLED for this run. This suite
+    truncates every account table and runs DDL through the migrator
+    credential, against whatever ADMIN_DATABASE_URL* point at:
+
+      ADMIN_DATABASE_URL             #{ENV.fetch('ADMIN_DATABASE_URL', '(unset)')}
+      ADMIN_DATABASE_URL_RO          #{ENV.fetch('ADMIN_DATABASE_URL_RO', '(unset)')}
+      ADMIN_DATABASE_URL_MIGRATIONS  #{ENV.fetch('ADMIN_DATABASE_URL_MIGRATIONS', '(unset)')}
+
+    If you did not mean to set this, stop now and unset it.
+    ****************************************************************
+  BANNER
+end
+
 # Before anything connects: every URL the suite can write through, not just
 # the app one. The destructive statements run through the migrator.
 offenders = ScratchGuard.offenders(ENV, scratch_dir: SCRATCH_DIR)

@@ -127,7 +127,7 @@ end
 # Actions. Stage list and behaviour live in bin/ci.
 desc 'Run the checks: bin/ci (lint, tryouts, RSpec)'
 task :test do
-  sh 'bin/ci'
+  sh File.expand_path('bin/ci', __dir__)
 end
 
 task default: :test

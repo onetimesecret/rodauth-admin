@@ -69,9 +69,11 @@ repos:
   # `bundle exec` so the version comes from Gemfile.lock and the hook is exactly
   # what `bin/ci lint` and the CI lint job run. No --fail-level: this repo runs
   # RuboCop strict and is clean, so the hook fails on anything CI would fail on.
-  # `--server` keeps a daemon warm (first commit pays boot, later ones are
-  # sub-second). `--autocorrect` applies safe fixes; when it rewrites a staged
-  # file pre-commit fails the commit so you review and re-stage.
+  # Deliberately no `--server`: it saves a couple of seconds on a tree this
+  # size and costs a stale daemon still holding the previous plugin gems after
+  # a Gemfile.lock bump, linting against rules that are no longer the rules.
+  # `--autocorrect` applies safe fixes; when it rewrites a staged file
+  # pre-commit fails the commit so you review and re-stage.
   # `--force-exclusion` honours AllCops/Exclude even for explicitly passed paths
   # (this matters for db/migrate/**).
   #
@@ -80,16 +82,16 @@ repos:
   - repo: local
     hooks:
       - id: rubocop
-        name: RuboCop (server, staged files)
+        name: RuboCop (staged files)
         description: Ruby static analysis and safe autocorrect
-        entry: bundle exec rubocop --server --config .rubocop.yml --force-exclusion --autocorrect
+        entry: bundle exec rubocop --config .rubocop.yml --force-exclusion --autocorrect
         language: system
         types: [ruby]
 
   # GitHub Actions workflow linting. Catches bad expressions, unknown contexts,
   # shellcheck findings inside `run:` blocks, and typo'd `uses:` refs before they
-  # cost a push. Built from source via Go (installed locally at
-  # /opt/homebrew/bin/go, present on ubuntu-latest runners).
+  # cost a push. Built from source, so it needs Go on PATH locally (bin/setup
+  # warns when it is missing); ubuntu-latest runners have Go preinstalled.
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.12
     hooks:

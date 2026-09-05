@@ -12,6 +12,23 @@ bundle install
 
 echo
 echo "==> git hooks"
+# actionlint and gitleaks are `language: golang` hooks: pre-commit builds them
+# from source, so without a Go toolchain --install-hooks fails partway through
+# and leaves the hooks half-installed. Warn rather than abort — the rest of
+# bin/setup is still worth having, and CI runs these hooks either way.
+if ! command -v go >/dev/null 2>&1; then
+  cat >&2 <<'WARN'
+WARNING: Go is not on PATH. The actionlint and gitleaks hooks are built from
+source by pre-commit, so installing the hooks will fail without it.
+
+    brew install go        # macOS
+    sudo apt install golang-go   # Debian/Ubuntu
+
+then re-run bin/setup.
+
+WARN
+fi
+
 if command -v pre-commit >/dev/null 2>&1; then
   # Both stages: the pre-commit hook is the fast lane, pre-push runs the suite.
   pre-commit install --install-hooks --hook-type pre-commit --hook-type pre-push

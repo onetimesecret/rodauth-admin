@@ -116,7 +116,9 @@ CI runs the same suite twice: once on scratch SQLite (`test`), and once on a
 real PostgreSQL authdb with `db/grants/postgres/rodauth_admin_roles.sql`
 applied and three distinct roles (`test-postgres`), which is the only place
 the grants and the append-only trigger are proven rather than assumed
-(`spec/grants_spec.rb`, `db/README.md`).
+(`spec/grants_spec.rb`, `db/README.md`). Alongside them: `lint` (RuboCop),
+`hygiene` (the pre-commit hooks over every file), `secrets` (gitleaks over the
+full history) and `audit` (bundler-audit).
 
 ## Configuration
 

@@ -59,8 +59,9 @@ psql -U postgres -v ON_ERROR_STOP=1 \
 
 ## CI
 
-`.github/workflows/ci.yml` runs the suite in two lanes, both through
-`bin/ci` (the single entry point — see
+`.github/workflows/ci.yml` runs six jobs (`lint`, `test`, `test-postgres`,
+`hygiene`, `secrets`, `audit`); the suite itself runs in two lanes, both
+through `bin/ci` (the single entry point — see
 [`docs/design/quality-gates.md`](../docs/design/quality-gates.md)):
 
 - **`test`** — scratch SQLite built by `spec/spec_helper.rb`, one file playing

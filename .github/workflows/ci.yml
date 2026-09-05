@@ -16,14 +16,22 @@ name: CI
 # Plus two standing checks:
 #
 #   hygiene        runs the pre-commit hooks over every file. This is what
-#                  guarantees the local hooks and CI cannot disagree: a hook
-#                  that only ever runs on a developer's machine is a hook that
-#                  is one `--no-verify` away from not existing.
+#                  guarantees the local hooks and CI cannot disagree for every
+#                  file-scoped hook: a hook that only ever runs on a
+#                  developer's machine is one `--no-verify` away from not
+#                  existing. The one hook it CANNOT re-run this way is
+#                  gitleaks (see `secrets` below), so it is skipped there.
+#   secrets        gitleaks over the full history. The upstream pre-commit
+#                  hook runs `gitleaks git --pre-commit --staged`, i.e. it
+#                  scans the staged diff; under `pre-commit run --all-files`
+#                  CI has staged nothing and the hook scans nothing at all.
+#                  So secrets get their own job with a pinned gitleaks binary.
 #   audit          bundler-audit against the current advisory database.
 #
-# Every check is invoked through bin/ci, the single entry point the local
-# pre-push hook also uses. Nothing in this file spells out a command line that
-# a developer cannot reproduce with one word.
+# Every Ruby-level check is invoked through bin/ci, the single entry point the
+# local pre-push hook also uses; the two that are not (hygiene, secrets) run a
+# tool the developer also has locally through pre-commit. Nothing in this file
+# spells out a command line that a developer cannot reproduce.
 #
 # Every `uses:` is pinned to a full commit SHA with the tag in a trailing
 # comment (same style as claude.yml): a tag is mutable, a SHA is not, and this
@@ -189,7 +197,10 @@ jobs:
       # a local guard rail, not a CI check. rubocop is skipped because the lint
       # job above already runs it over the whole tree via bin/ci lint, in
       # parallel, and reports failures under a name that says 'lint'.
-      SKIP: no-commit-to-branch,rubocop
+      # gitleaks is skipped here because it would be a no-op: its entry is
+      # `gitleaks git --pre-commit --staged` and nothing is staged in CI. The
+      # `secrets` job scans the history instead.
+      SKIP: no-commit-to-branch,rubocop,gitleaks
       PRE_COMMIT_VERSION: 4.6.0
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -215,6 +226,47 @@ jobs:
 
       - name: pre-commit (all files)
         run: pre-commit run --all-files --show-diff-on-failure --color=always --hook-stage pre-commit
+
+  # Secret detection, over the whole history rather than a diff.
+  #
+  # `gitleaks git` (the default mode) walks `git log -p`, so a credential that
+  # was committed and later removed is still found — which is the case that
+  # matters, because a pushed secret is a burned secret whether or not HEAD
+  # still contains it. That needs the full history, hence fetch-depth: 0; the
+  # repo is small enough for this to stay well under a minute. `gitleaks dir`
+  # would only see the working tree and would miss exactly the commits a
+  # `--no-verify` push is likely to contain.
+  #
+  # The binary is a pinned release, not the pre-commit hook, because the hook
+  # cannot scan history. Keep GITLEAKS_VERSION equal to the `rev:` of the
+  # gitleaks repo in .pre-commit-config.yaml so local and CI agree on rules;
+  # GITLEAKS_SHA256 is from gitleaks_<version>_checksums.txt on that release.
+  secrets:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -o "${RUNNER_TEMP}/${tarball}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}" gitleaks
+          install -m 0755 "${RUNNER_TEMP}/gitleaks" /usr/local/bin/gitleaks
+          gitleaks version
+
+      # --redact so a finding does not print the secret into a public log.
+      - name: gitleaks (full history)
+        run: gitleaks git --redact --no-banner .
 
   # Dependency advisories. Separate from lint because it needs the network and
   # can go red without anyone changing a line of code; that is exactly why it

@@ -60,12 +60,35 @@ ScratchGuard.violation('sqlite:///var/lib/authdb.sqlite3', scratch_dir: @scratch
 ScratchGuard.violation("#{@scratch_dir}/authdb.sqlite3", scratch_dir: @scratch_dir)
 #=> nil
 
-## The override is the documented escape hatch
+## The override is the documented escape hatch, and it is read from the
+## env hash passed in — never from the real ENV
+ScratchGuard.violation(@migrator_prod, env: { ScratchGuard::DESTRUCTIVE_OVERRIDE => '1' })
+#=> nil
+
+## Without it in that hash the same URL is refused, whatever the real ENV says
+ScratchGuard.violation(@migrator_prod, env: {})
+#=> "onetime_authdb"
+
+## Only the exact value '1' counts
+ScratchGuard.violation(@migrator_prod, env: { ScratchGuard::DESTRUCTIVE_OVERRIDE => 'true' })
+#=> "onetime_authdb"
+
+## An override in the real ENV does not reach the default-arg-free path used
+## by offenders: offenders reads the override from the hash it was given
 ENV[ScratchGuard::DESTRUCTIVE_OVERRIDE] = '1'
-refused = ScratchGuard.violation(@migrator_prod)
+refused = ScratchGuard.offenders({ 'ADMIN_DATABASE_URL' => @migrator_prod })
 ENV.delete(ScratchGuard::DESTRUCTIVE_OVERRIDE)
 refused
-#=> nil
+#=> [['ADMIN_DATABASE_URL', 'onetime_authdb']]
+
+## ... and an override in the hash offenders was given clears the whole set
+ScratchGuard.offenders({ 'ADMIN_DATABASE_URL' => @migrator_prod,
+                         ScratchGuard::DESTRUCTIVE_OVERRIDE => '1' })
+#=> []
+
+## override? is the predicate both use
+[ScratchGuard.override?({ ScratchGuard::DESTRUCTIVE_OVERRIDE => '1' }), ScratchGuard.override?({})]
+#=> [true, false]
 
 ## The refusal message names the variable that failed
 ScratchGuard.refusal('ADMIN_DATABASE_URL_MIGRATIONS', 'onetime_authdb').lines.first.strip
