@@ -2,7 +2,7 @@
 title: Rodauth Admin — project charter
 status: Accepted
 decided: 2026-09-01
-revision: 2 (2026-09-05) — operator identity resolved, two-credential DB posture
+revision: 3 (2026-09-05) — Phase 2 decisions: customer-count seam, colonel deep-link config
 repo-created: 2026-09-04
 supersedes-in-part: onetimesecret/onetimesecret docs/specs/rodauth-admin (see docs/specs/inherited/)
 published: https://claude.ai/code/artifact/b39b6c4c-0e7b-4dbb-9e28-d9f1c7ab5acb
@@ -207,10 +207,15 @@ Read against `00-scope.md` and `10-aggregate-visibility.md`
   ambition.
 - **Password-history display** — count only, but confirm with security review
   before shipping (inherited open question).
-- **Redis-side reads.** Drift metrics want the Familia customer count.
-  Read-only Redis access from this codebase, or a tiny public-ish stats
-  endpoint on the main app? Prefer whichever avoids holding two production
-  credentials in v1.
+- **Redis-side reads — decided (2026-09-05):** neither, in v1. Rodauth Admin
+  holds no Redis credential and makes no cross-service call, which keeps the
+  §4 integration-seam count honest and the blast radius one database wide.
+  The customer-count drift stat ships behind a pluggable
+  `customer_count_source` seam whose default is a null source: the stat
+  renders "not configured" rather than a wrong number or a 500. The intended
+  future source is the tiny stats endpoint on the main app — one read, no
+  credential shared, and the seam already exists to take it. Everything else
+  on the Phase 2 board is computed from the authdb and is unaffected.
 
 ---
 

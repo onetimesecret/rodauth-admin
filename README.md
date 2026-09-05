@@ -4,9 +4,10 @@ Standalone admin application for the Rodauth (`full`-mode) authentication
 store behind [Onetime Secret](https://github.com/onetimesecret/onetimesecret):
 the ~200k-account SQL authdb that the colonel console cannot see or touch.
 
-**Status:** Phase 1 (bootstrap) in progress. The front door works end to end
-against a local authdb; deploy target and production grants are not yet
-applied.
+**Status:** Phase 1 (bootstrap) done — the front door works end to end
+against a local authdb. Phase 2 (aggregate visibility) in progress: the
+read-only stats board and the locked / orphaned lists. Deploy target and
+production grants are not yet applied.
 
 ## Read first
 
@@ -47,6 +48,8 @@ lib/rodauth_admin/
   app.rb                     the Roda app: healthz, rodauth routes, allowlist gate, heartbeat
   allowlist.rb               admin_operators reads and audited writes
   audit.rb                   admin_actions writer
+  stats.rb                   aggregate authdb counts, briefly cached, degrades to unavailable
+  account_list.rb            the locked / orphaned account lists, filtered and paginated
   authdb_schema.rb           production authdb shape as a rodauth-tools feature list
 db/migrate/                  the admin tables (Sequel migrations, own bookkeeping table)
 db/grants/postgres/          the two runtime roles and every grant
@@ -74,11 +77,17 @@ bundle exec rackup                # http://localhost:9292
 Sign in, enrol TOTP when prompted, and you should see the heartbeat.
 
 ```bash
-bundle exec rake test             # tryouts + rspec
+bundle exec rake test             # tryouts + rspec (SQLite)
 bundle exec rubocop
 bundle exec rake authdb:status    # which authdb tables the door needs, and whether they exist
 bundle exec rake audit:recent     # tail admin_actions
 ```
+
+CI runs the same suite twice: once on scratch SQLite, and once on a real
+PostgreSQL authdb with `db/grants/postgres/rodauth_admin_roles.sql` applied
+and three distinct roles, which is the only place the grants and the
+append-only trigger are proven rather than assumed (`spec/grants_spec.rb`,
+`db/README.md`). Locally, `rake test` is the SQLite lane.
 
 ## Configuration
 

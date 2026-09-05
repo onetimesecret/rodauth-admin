@@ -2,9 +2,16 @@
 ---
 name: CI
 
-# Lint, tryouts, and RSpec against scratch SQLite databases (the authdb is
-# built from the rodauth-tools templates in spec_helper; nothing external).
-# A PostgreSQL lane for the grant files is Phase 2 work.
+# Two test lanes over the same suite.
+#
+#   test           scratch SQLite: the authdb is built from the rodauth-tools
+#                  templates in spec_helper, nothing external, one file plays
+#                  all three credentials. Fast, and the local default.
+#   test-postgres  a real PostgreSQL authdb with the three roles and the grant
+#                  file from db/grants/postgres/ actually applied, so the
+#                  privilege boundary and the append-only trigger are proven
+#                  together rather than assumed (docs/design/database-credentials.md).
+#                  spec/grants_spec.rb is the part that only runs here.
 
 on:
   push:
@@ -41,5 +48,77 @@ jobs:
           bundler-cache: true
       - name: Tryouts
         run: bundle exec try --agent try/
+      - name: RSpec
+        run: bundle exec rspec --format progress
+
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Production is PostgreSQL; 16 is the floor the admin_actions trigger
+        # needs anyway (EXECUTE FUNCTION wants >= 11, db/migrate/002).
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci_superuser
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      RACK_ENV: test
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: ci_superuser
+      # Throwaway, and never outside this job: the point is that the three
+      # URLs are three different roles, not that the passwords are secret.
+      APP_ROLE_PASSWORD: ci_app_role
+      RO_ROLE_PASSWORD: ci_ro_role
+      # The superuser stands in for ots_migrator: it owns the schema and is
+      # the only credential that ever runs DDL.
+      ADMIN_DATABASE_URL_MIGRATIONS: postgresql://postgres:ci_superuser@localhost:5432/onetime_authdb
+      ADMIN_DATABASE_URL: postgresql://rodauth_admin_app:ci_app_role@localhost:5432/onetime_authdb
+      ADMIN_DATABASE_URL_RO: postgresql://rodauth_admin_ro:ci_ro_role@localhost:5432/onetime_authdb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      # The grant file names the production database, so CI uses that name.
+      - name: Create the authdb
+        run: psql -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE onetime_authdb'
+
+      # Rodauth's tables from the rodauth-tools templates, the tenant app's
+      # deltas, and (PostgreSQL only) the two SECURITY DEFINER password
+      # functions production has and Rodauth uses by default on PostgreSQL.
+      - name: Build the authdb from the rodauth-tools templates
+        run: bundle exec rake authdb:dev
+
+      - name: Migrate the admin tables
+        run: bundle exec rake db:migrate
+
+      # One obvious step: substitute the two CHANGE_ME placeholders and apply
+      # the file exactly as an operator would. It is reviewed like code, so it
+      # is executed like code. \c inside the file switches to the authdb.
+      - name: Apply the grant file
+        run: |
+          sed -e "s/CHANGE_ME_APP_ROLE_PASSWORD/${APP_ROLE_PASSWORD}/" \
+              -e "s/CHANGE_ME_RO_ROLE_PASSWORD/${RO_ROLE_PASSWORD}/" \
+              db/grants/postgres/rodauth_admin_roles.sql > "${RUNNER_TEMP}/grants.sql"
+          psql -d postgres -v ON_ERROR_STOP=1 -f "${RUNNER_TEMP}/grants.sql"
+
+      # Tryouts build their own in-process Sequel.sqlite databases and are
+      # unaffected by the URLs above; they run here to keep the lane a full
+      # `rake test` rather than a subset.
+      - name: Tryouts
+        run: bundle exec try --agent try/
+
+      # spec_helper honours the pre-set ADMIN_DATABASE_URL and skips the build
+      # steps; the suite runs as rodauth_admin_app with the real grants, and
+      # spec/grants_spec.rb asserts the boundary itself.
       - name: RSpec
         run: bundle exec rspec --format progress

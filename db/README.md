@@ -51,6 +51,41 @@ ADMIN_DATABASE_URL_MIGRATIONS=postgresql://ots_migrator:...@authdb/onetime_authd
 psql -U postgres -f db/grants/postgres/rodauth_admin_roles.sql   # after editing CHANGE_ME
 ```
 
+## CI
+
+`docs/design/database-credentials.md` says the specs prove behaviour, the
+grant file proves privilege, and a Postgres CI lane is the place to prove
+both together. That lane is `test-postgres` in
+`.github/workflows/ci.yml`. Against a `postgres:16` service container it:
+
+1. creates `onetime_authdb` as the superuser (standing in for `ots_migrator`
+   — the only credential in the job that runs DDL);
+2. builds Rodauth's tables with `rake authdb:dev`, which on PostgreSQL also
+   creates the two SECURITY DEFINER password functions production has;
+3. runs `rake db:migrate` for the admin tables and their trigger;
+4. applies `db/grants/postgres/rodauth_admin_roles.sql` verbatim, with the
+   two `CHANGE_ME` passwords substituted by `sed` — the file is reviewed
+   like code, so it is executed like code;
+5. runs the whole suite with `ADMIN_DATABASE_URL` as `rodauth_admin_app`,
+   `ADMIN_DATABASE_URL_RO` as `rodauth_admin_ro`, and
+   `ADMIN_DATABASE_URL_MIGRATIONS` as the superuser.
+
+What that proves, and nothing else does:
+
+- the grants are **sufficient** — the front-door specs sign in, enrol TOTP,
+  lock out and write `admin_actions` as `rodauth_admin_app` with no privilege
+  it was not deliberately given, through the password functions rather than
+  the hash table;
+- the grants are **restrictive** — `spec/grants_spec.rb` asserts
+  `rodauth_admin_ro` can read every Phase 2 table, cannot see a password
+  hash, cannot call the password functions, and cannot write; and that
+  `rodauth_admin_app` cannot UPDATE or DELETE `admin_actions`;
+- the **trigger** is the second lock — the same spec shows the migrator that
+  owns `admin_actions` is refused too, which no grant can express.
+
+On SQLite there are no roles and the grant file is inert, so
+`spec/grants_spec.rb` skips cleanly and the default lane stays fast.
+
 ## Known drift between the inherited spec and production
 
 `10-aggregate-visibility.md` counts `account_recovery_codes WHERE used_at IS

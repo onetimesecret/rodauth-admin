@@ -97,6 +97,18 @@ module RodauthAdmin
       presence(ENV.fetch('RODAUTH_ADMIN_HOST', nil)) || dev_default('RODAUTH_ADMIN_HOST', 'localhost')
     end
 
+    # Base URL of the tenant app's colonel console. CHARTER §4 integration
+    # seam 1, and the whole of it: an account row that has an external_id
+    # renders an outbound link to
+    # "#{colonel_console_url}/colonel/customers/<external_id>". Nothing is
+    # ever requested from it — no credential, no cross-service call — so it
+    # is optional everywhere including production. Unset means the external
+    # id renders as plain text.
+    def colonel_console_url
+      url = presence(ENV.fetch('COLONEL_CONSOLE_URL', nil))
+      url&.sub(%r{/+\z}, '')
+    end
+
     # Fail fast at boot. The migrations URL is deliberately not validated
     # here: the running app must work without it.
     def validate!

@@ -44,6 +44,12 @@ GRANT SELECT ON accounts, account_statuses TO rodauth_admin_app;
 -- them and the role needs no direct access to the hash table. The direct
 -- SELECT below is the fallback for databases without the functions; drop it
 -- once the functions are confirmed present.
+-- SECURITY DEFINER functions execute as their owner, so PUBLIC EXECUTE would
+-- hand every role in the database an oracle over the hash table both runtime
+-- roles are deliberately denied SELECT on. Revoke first, then grant to the
+-- one role that needs it.
+REVOKE ALL ON FUNCTION rodauth_get_salt(bigint) FROM PUBLIC;
+REVOKE ALL ON FUNCTION rodauth_valid_password_hash(bigint, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION rodauth_get_salt(bigint) TO rodauth_admin_app;
 GRANT EXECUTE ON FUNCTION rodauth_valid_password_hash(bigint, text) TO rodauth_admin_app;
 -- GRANT SELECT ON account_password_hashes TO rodauth_admin_app;  -- fallback only
@@ -72,6 +78,26 @@ GRANT SELECT ON admin_schema_info TO rodauth_admin_app;
 -- ============================================================================
 -- rodauth_admin_ro: every admin query (CHARTER §3 capability table)
 -- ============================================================================
+--
+-- Phase 2 (aggregate visibility) reads exactly these eight, and every stat
+-- and filtered list on the board fails closed without them. Removing one is
+-- removing a screen, so they are called out separately from the rest of the
+-- capability surface:
+--
+--   accounts                     status breakdown, orphan list (external_id
+--                                IS NULL), the id every other count joins on
+--   account_statuses             status id -> name; never trust the ordinal
+--   account_otp_keys             MFA adoption
+--   account_webauthn_keys        MFA adoption (passkeys)
+--   account_lockouts             active lockouts (always with deadline > now)
+--   account_login_failures       failure counts beside the lockout list
+--   account_active_session_keys  active session keys (NOT "users online")
+--   account_recovery_codes       unused recovery codes; a row count, since
+--                                Rodauth deletes a code on use (db/README.md)
+--
+-- spec/grants_spec.rb asserts all eight are readable by this role, and that
+-- writes are refused, whenever the suite runs against PostgreSQL.
+-- The remaining tables below are Phase 3 (account detail) surface.
 
 GRANT SELECT ON
   accounts,
