@@ -24,6 +24,24 @@ module RodauthAdmin
       db[TABLE].order(:created_at).all
     end
 
+    class AmbiguousEmail < Error; end
+
+    # Resolve a (normalized) email to an accounts.id: the authdb first, the
+    # allowlist's display copy only if the authdb has no such address.
+    # @raise [AmbiguousEmail] if the address now belongs to a different
+    #   account in the authdb than the one it was allowlisted under
+    # @return [Integer, nil]
+    def account_id_for_email(email, authdb:, db: Database.app)
+      current = authdb[:accounts].where(email: email).get(:id)
+      listed  = db[TABLE].where(Sequel.function(:lower, :email) => email).get(:account_id)
+      if current && listed && current != listed
+        raise AmbiguousEmail,
+              "#{email} is account #{current} in the authdb but was allowlisted as account #{listed}"
+      end
+
+      current || listed
+    end
+
     # @return [Integer] the new admin_operators row id
     def add!(account_id:, email:, actor:, reason:, db: Database.app, actor_account_id: nil) # rubocop:disable Metrics/ParameterLists
       db.transaction do

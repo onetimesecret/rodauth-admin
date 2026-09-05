@@ -130,6 +130,10 @@ RSpec.describe RodauthAdmin::App do
     expect(stored).not_to be_nil
     expect(stored).not_to eq(secret), 'otp_keys_use_hmac? must be on, matching the tenant app'
 
+    enrolled = actions('otp_setup').last
+    expect(enrolled[:actor]).to eq(email), 'enrolling TOTP on a production account is an admin action'
+    expect(enrolled[:actor_account_id]).to eq(account_id)
+
     messages = authdb[:account_authentication_audit_logs].where(account_id: account_id).select_map(:message)
     expect(messages).to include('rodauth-admin: login')
     expect(messages).to all(start_with('rodauth-admin: '))
@@ -173,6 +177,108 @@ RSpec.describe RodauthAdmin::App do
     expect(last_response).to be_redirect
     expect(last_response.location).to end_with('/login')
     expect(actions('operator_remove').last[:target]).to eq(email)
+  end
+
+  it 'does not route otp-disable: MFA is removed in the tenant app, never here' do
+    allowlist!
+    login!
+    complete_otp_setup!
+    get '/'
+    expect(last_response.status).to eq(200)
+
+    # otp-disable, and two_factor_base's multifactor-disable (removes every
+    # second factor) and multifactor-manage (links to it).
+    paths = %w[/otp-disable /multifactor-disable /multifactor-manage]
+    paths.each do |path|
+      get path
+      expect(last_response.status).to eq(404), "GET #{path} must not be routed"
+    end
+    # A tokenless POST ends at the CSRF handler (session cleared), so the
+    # last POST's status is all that can be asserted; the key is what matters.
+    paths.each { |path| post path, password: password } # rubocop:disable Style/CombinableLoops
+    expect(last_response.status).not_to eq(200)
+    expect(authdb[:account_otp_keys].where(id: account_id).count).to eq(1)
+  end
+
+  it 'shuts Rodauth routes too once the allowlist row is removed' do
+    allowlist!
+    login!
+    RodauthAdmin::Allowlist.remove!(account_id: account_id, actor: 'spec', reason: 'offboarding')
+
+    get '/otp-setup'
+    expect(last_response).to be_redirect
+    expect(last_response.location).to end_with('/login'), 'de-provisioned operator must not reach otp-setup'
+    expect(authdb[:account_otp_keys].where(id: account_id).count).to eq(0)
+
+    get '/login'
+    expect(last_response.body).to include('no longer an operator')
+  end
+
+  it 'ends the session when the tenant account is closed' do
+    allowlist!
+    login!
+    complete_otp_setup!
+    get '/'
+    expect(last_response.status).to eq(200)
+
+    authdb[:accounts].where(id: account_id).update(status_id: 3)
+    get '/'
+    expect(last_response).to be_redirect
+    expect(last_response.location).to end_with('/login'), 'a closed tenant account is not an operator'
+    expect(RodauthAdmin::Allowlist.allowed?(account_id)).to be(true), 'the allowlist row is not touched'
+  end
+
+  it 'shuts Rodauth routes too once the tenant account is closed, and records the revocation' do
+    allowlist!
+    login!
+    authdb[:accounts].where(id: account_id).update(status_id: 3)
+
+    get '/otp-setup'
+    expect(last_response).to be_redirect
+    expect(last_response.location).to end_with('/login'), 'a closed account must not reach otp-setup'
+    expect(authdb[:account_otp_keys].where(id: account_id).count).to eq(0)
+
+    revoked = actions('session_revoked').last
+    expect(revoked[:actor_account_id]).to eq(account_id)
+    expect(revoked[:reason]).to eq('session')
+  end
+
+  it 'ends the session, without a 500, when the tenant account is deleted' do
+    allowlist!
+    login!
+    complete_otp_setup!
+
+    authdb[:account_authentication_audit_logs].where(account_id: account_id).delete
+    %i[account_otp_keys account_login_failures account_lockouts account_password_hashes accounts].each do |t|
+      authdb[t].where(id: account_id).delete
+    end
+    get '/'
+    expect(last_response).to be_redirect
+    expect(last_response.location).to end_with('/login')
+  end
+
+  it 'sends a stale form back to the login page instead of a 500' do
+    allowlist!
+    before = actions('login').size
+    post '/login', login: email, password: password, _csrf: 'stale-token-from-an-expired-session'
+    expect(last_response).to be_redirect
+    expect(last_response.location).to end_with('/login')
+    expect(actions('login').size).to eq(before), 'the login must not go through'
+
+    get '/login'
+    expect(last_response.body).to include('session expired')
+    get '/'
+    expect(last_response).to be_redirect, 'no session was established'
+  end
+
+  it 'records a login whose User-Agent is longer than 255 bytes' do
+    allowlist!
+    header 'User-Agent', "Mozilla/5.0 #{'x' * 600}"
+    login!
+    expect(last_response).to be_redirect
+    row = actions('login').last
+    expect(row[:actor]).to eq(email)
+    expect(row[:user_agent].bytesize).to eq(512)
   end
 
   it 'locks the shared identity after five bad passwords, same as the tenant app' do

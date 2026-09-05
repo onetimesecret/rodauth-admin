@@ -8,6 +8,8 @@
 #   - PostgreSQL: a trigger function rejects UPDATE and DELETE, and the
 #     runtime role gets INSERT/SELECT only (db/grants/postgres/rodauth_admin_roles.sql)
 #   - SQLite: BEFORE UPDATE / BEFORE DELETE triggers RAISE(ABORT)
+#
+# Requires PostgreSQL >= 11 (EXECUTE FUNCTION in CREATE TRIGGER).
 Sequel.migration do
   up do
     json_type = database_type == :postgres ? :jsonb : String
@@ -15,14 +17,18 @@ Sequel.migration do
     create_table(:admin_actions) do
       primary_key :id, type: :Bignum
       DateTime :at, null: false, default: Sequel::CURRENT_TIMESTAMP
-      String :action, null: false
-      String :actor, null: false            # operator email or 'cli:<user>'
-      Bignum :actor_account_id              # authdb accounts.id; nil for CLI
-      Bignum :target_account_id             # authdb accounts.id acted on
-      String :target                        # display handle (email / external_id)
-      String :reason, null: false
-      String :ip
-      String :user_agent
+      # text: true makes the type explicit: nothing here has a natural
+      # 255-byte bound, and a long User-Agent or reason must never abort the
+      # insert that records the request. (Sequel already emits text for a
+      # bare String on PostgreSQL; SQLite gets varchar(255), unenforced.)
+      String :action, null: false, text: true
+      String :actor, null: false, text: true   # operator email or 'cli:<user>'
+      Bignum :actor_account_id                 # authdb accounts.id; nil for CLI
+      Bignum :target_account_id                # authdb accounts.id acted on
+      String :target, text: true               # display handle (email / external_id)
+      String :reason, null: false, text: true
+      String :ip, text: true
+      String :user_agent, text: true           # capped at 512 by Audit.record
       column :metadata, json_type
       index :at, name: :admin_actions_at_idx
       index %i[actor_account_id at], name: :admin_actions_actor_at_idx
