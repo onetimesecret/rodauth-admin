@@ -10,6 +10,8 @@ require_relative 'database'
 require_relative 'allowlist'
 require_relative 'audit'
 require_relative 'auth'
+require_relative 'stats'
+require_relative 'account_list'
 
 module RodauthAdmin
   class App < Roda
@@ -71,13 +73,62 @@ module RodauthAdmin
       rodauth.require_authentication
       rodauth.require_two_factor_setup
 
+      # Read-only screens: no Audit.record here. The audit trail is for
+      # mutations (CHARTER §4); the sign-in that opened this session is
+      # already recorded.
       r.root do
         @account = rodauth.account_from_session or revoke_session!(r)
+        @stats = Stats.cached
         view 'index'
+      end
+
+      r.get 'accounts' do
+        @list = AccountList.call(filter: r.params['filter'],
+                                 page: r.params['page'] || 1,
+                                 per_page: r.params['per_page'] || AccountList::PER_PAGE_DEFAULT)
+        view 'accounts'
+      rescue AccountList::InvalidFilter => e
+        # A missing or mistyped filter is a 400, not a redirect to a default
+        # list: a typo in an operator's URL should be loud, and silently
+        # showing a different list than the one asked for is worse.
+        response.status = 400
+        @reason = e.message
+        view 'accounts_filter'
       end
     end
 
     private
+
+    # A deep link to the tenant colonel console (CHARTER §4 seam 1), which
+    # exists only when both halves are configured: an unset console URL or an
+    # orphan row renders as plain text instead.
+    def colonel_customer_url(external_id)
+      base = Env.colonel_console_url
+      return nil if base.nil? || external_id.nil? || external_id.to_s.empty?
+
+      "#{base}/colonel/customers/#{external_id}"
+    end
+
+    # "12 (3%)" — the denominator is total_accounts, which can be zero on an
+    # empty authdb.
+    def percent_of(count, total)
+      return '—' if count.nil?
+      return count.to_s if total.nil? || total.zero?
+
+      "#{count} (#{((count.to_f / total) * 100).round(1)}%)"
+    end
+
+    def utc_time(time)
+      return '—' if time.nil?
+
+      time.getutc.strftime('%Y-%m-%d %H:%M:%S UTC')
+    end
+
+    # Preserves filter and per_page across pagination; page is the only
+    # thing a prev/next link changes.
+    def accounts_path(filter, page, per_page)
+      "/accounts?filter=#{filter}&page=#{page}&per_page=#{per_page}"
+    end
 
     # The signed-in identity is still a Verified authdb account AND still
     # on the allowlist. Both are re-read from the database; neither is

@@ -1,7 +1,90 @@
-<h2>Heartbeat</h2>
-<p>Signed in with a production account, second factor verified, allowlisted. Phase 1 exit criterion.</p>
+<%#
+  The stats board (CHARTER §6 phase 2). Every label here is load-bearing:
+  the inherited spec's risks section turns on stats being named for what
+  they actually count, so do not shorten "Active session keys" or
+  "Unused recovery codes (rows)".
+%>
+<h2>Auth stats</h2>
+
+<% if @stats.available %>
+  <p class="footnote">as of <%= @stats.computed_at.getutc.strftime('%H:%M:%S') %> UTC (cached &le;60s)</p>
+
+  <div class="stats">
+    <div class="stat">
+      <h3>Total accounts</h3>
+      <p class="value"><%= @stats.total_accounts %></p>
+    </div>
+
+    <div class="stat">
+      <h3>Active lockouts</h3>
+      <p class="value"><a href="/accounts?filter=locked"><%= @stats.active_lockouts %></a></p>
+      <p class="footnote">Locked right now (deadline in the future).</p>
+    </div>
+
+    <div class="stat">
+      <h3>Orphaned accounts</h3>
+      <p class="value"><a href="/accounts?filter=orphaned"><%= @stats.orphaned_accounts %></a></p>
+      <p class="footnote">No <code>external_id</code>: nothing to link to on the Redis side.</p>
+    </div>
+
+    <div class="stat">
+      <h3>Active session keys</h3>
+      <p class="value"><%= @stats.active_session_keys %></p>
+      <p class="footnote">Session-key rows, not users online: Rodauth keeps them until its inactivity cleanup runs.</p>
+    </div>
+
+    <div class="stat">
+      <h3>Unused recovery codes (rows)</h3>
+      <p class="value"><%= @stats.recovery_code_rows %></p>
+      <p class="footnote">Rodauth deletes a recovery code on use, so <code>used_at</code> is always NULL in production and
+        the unused count is simply the row count (db/README.md, &ldquo;Known drift&rdquo;).</p>
+    </div>
+
+    <div class="stat">
+      <h3>MFA adoption</h3>
+      <p class="value"><%= percent_of(@stats.mfa_otp_accounts, @stats.total_accounts) %></p>
+      <p class="footnote">OTP keys</p>
+      <p class="value"><%= percent_of(@stats.mfa_webauthn_accounts, @stats.total_accounts) %></p>
+      <p class="footnote">WebAuthn accounts</p>
+    </div>
+
+    <div class="stat">
+      <h3>Customer-count drift</h3>
+      <% if @stats.customer_count.nil? %>
+        <p class="value">not configured</p>
+        <p class="footnote">No Redis-side customer count is wired up: v1 makes no cross-service calls and the source is
+          left open in CHARTER &sect;7. Configure one and this becomes a drift signal &mdash; informational, not an
+          invariant.</p>
+      <% else %>
+        <p class="value"><%= @stats.customer_count_delta %></p>
+        <p class="footnote"><%= @stats.total_accounts %> accounts &minus; <%= @stats.customer_count %> customers.
+          A drift signal, worth attention only when large or growing.</p>
+      <% end %>
+    </div>
+
+    <div class="stat wide">
+      <h3>Status breakdown</h3>
+      <table>
+        <tr><th>Status</th><th>Accounts</th></tr>
+        <% @stats.status_breakdown.each do |status| %>
+          <tr><td><%= status[:name] %></td><td><%= status[:count] %></td></tr>
+        <% end %>
+      </table>
+      <p class="footnote">Labels are read from <code>account_statuses</code>; the 1/2/3 mapping is seed data, not a
+        contract.</p>
+    </div>
+  </div>
+<% else %>
+  <div class="degraded">
+    <p><strong>Stats are unavailable.</strong> The authdb is unreachable or the read-only credential is misconfigured;
+      try again.</p>
+    <p class="footnote"><%= @stats.reason %></p>
+  </div>
+<% end %>
+
+<h2>Operator</h2>
 <dl>
-  <dt>Operator</dt><dd><%= @account[:email] %></dd>
+  <dt>Signed in as</dt><dd><%= @account[:email] %></dd>
   <dt>Account id</dt><dd><code><%= @account[:id] %></code></dd>
   <dt>External id</dt><dd><code><%= @account[:external_id] || '—' %></code></dd>
   <dt>Environment</dt><dd><%= RodauthAdmin::Env.rack_env %></dd>

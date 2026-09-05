@@ -1,0 +1,76 @@
+<%#
+  Email display policy (inherited spec, "Notes / risks"): emails are shown
+  in full rather than obscured. Rodauth Admin has single-digit operators,
+  sits behind password + TOTP + the allowlist, and both of these lists exist
+  to be acted on — an obscured address is not enough to find the account in
+  support tooling. The decision is recorded here so a future reader sees it
+  was a choice, not an oversight.
+%>
+<% locked = @list.filter == :locked %>
+<h2><%= locked ? 'Locked accounts' : 'Orphaned accounts' %></h2>
+<p class="footnote">
+  <% if locked %>
+    Accounts with a lockout deadline in the future. Expired lockout rows linger in the table and are excluded here.
+  <% else %>
+    Accounts with no <code>external_id</code>, so no customer record to link to.
+  <% end %>
+</p>
+
+<div class="filters">
+  <a href="/accounts?filter=locked" class="<%= 'current' if locked %>">Locked</a>
+  <a href="/accounts?filter=orphaned" class="<%= 'current' unless locked %>">Orphaned</a>
+</div>
+
+<% if @list.available %>
+  <% if @list.rows.empty? %>
+    <p><%= locked ? 'No account is locked out right now.' : 'Every account is linked to a customer record.' %></p>
+  <% else %>
+    <table>
+      <tr>
+        <th>Email</th>
+        <th>Status</th>
+        <th>External id</th>
+        <th>Created</th>
+        <% if locked %><th>Lockout deadline</th><th>Login failures</th><% end %>
+      </tr>
+      <% @list.rows.each do |row| %>
+        <tr>
+          <td><%= row.email %></td>
+          <td><%= row.status || row.status_id %></td>
+          <td>
+            <% url = colonel_customer_url(row.external_id) %>
+            <% if url %>
+              <a href="<%= url %>"><code><%= row.external_id %></code></a>
+            <% elsif row.external_id %>
+              <code><%= row.external_id %></code>
+            <% else %>
+              —
+            <% end %>
+          </td>
+          <td><%= utc_time(row.created_at) %></td>
+          <% if locked %>
+            <td><%= utc_time(row.lockout_deadline) %></td>
+            <td><%= row.login_failures %></td>
+          <% end %>
+        </tr>
+      <% end %>
+    </table>
+
+    <div class="pagination">
+      <span>page <%= @list.page %> of <%= @list.pages %> &middot; total <%= @list.total %></span>
+      <% if @list.prev_page %>
+        <a href="<%= accounts_path(@list.filter, @list.prev_page, @list.per_page) %>">&larr; previous</a>
+      <% end %>
+      <% if @list.next_page %>
+        <a href="<%= accounts_path(@list.filter, @list.next_page, @list.per_page) %>">next &rarr;</a>
+      <% end %>
+      <span class="footnote"><%= @list.per_page %> per page</span>
+    </div>
+  <% end %>
+<% else %>
+  <div class="degraded">
+    <p><strong>This list is unavailable.</strong> The authdb is unreachable or the read-only credential is
+      misconfigured; try again.</p>
+    <p class="footnote"><%= @list.reason %></p>
+  </div>
+<% end %>

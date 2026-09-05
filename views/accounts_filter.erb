@@ -1,0 +1,9 @@
+<h2>Unknown account filter</h2>
+<p>The account list is filter-driven and the filter is a strict whitelist, so a missing or mistyped one is refused
+  rather than silently answered with a different list.</p>
+<p class="footnote"><%= @reason %></p>
+<ul>
+  <% RodauthAdmin::AccountList::FILTERS.each do |filter| %>
+    <li><a href="/accounts?filter=<%= filter %>"><code><%= filter %></code></a></li>
+  <% end %>
+</ul>

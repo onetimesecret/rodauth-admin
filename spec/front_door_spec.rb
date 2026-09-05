@@ -3,56 +3,19 @@
 # frozen_string_literal: true
 
 require_relative 'spec_helper'
+require_relative 'support/front_door_helpers'
 
 # Phase 1 exit criterion: an operator signs in with their production account,
-# completes TOTP, is allowlisted, and sees the heartbeat. Everything else
+# completes TOTP, is allowlisted, and gets in. Everything else
 # here is the set of doors that must stay shut.
 RSpec.describe RodauthAdmin::App do
+  include FrontDoorHelpers
+
   def app = RodauthAdmin::App
 
   let(:email) { 'operator@example.com' }
   let(:password) { 'correct horse battery staple' }
   let!(:account_id) { create_account(email: email, password: password, external_id: 'extid-op-1') }
-
-  def allowlist!(id = account_id)
-    RodauthAdmin::Allowlist.add!(account_id: id, email: email, actor: 'spec', reason: 'test fixture')
-  end
-
-  # Roda's route_csrf plugin issues per-path tokens; a real browser gets one
-  # from the rendered form, so the specs do the same.
-  def hidden_field(body, name)
-    body[/name="#{name}"[^>]*value="([^"]+)"/, 1] || body[/value="([^"]+)"[^>]*name="#{name}"/, 1]
-  end
-
-  def form_post(path, params = {})
-    get path
-    token = hidden_field(last_response.body, '_csrf')
-    expect(token).not_to be_nil, "no CSRF token on GET #{path} (status #{last_response.status})"
-    post path, params.merge(_csrf: token)
-  end
-
-  def login!(login = email, passwd = password)
-    form_post '/login', login: login, password: passwd
-  end
-
-  # Rodauth's otp-setup form carries the provisioning secret (what the
-  # authenticator app gets from the QR) and, with otp_keys_use_hmac?, the
-  # raw secret that is what actually lands in account_otp_keys. Codes are
-  # computed from the provisioning secret. Returns it for later sign-ins.
-  def complete_otp_setup!
-    get '/otp-setup'
-    expect(last_response.status).to eq(200)
-    body = last_response.body
-    secret = hidden_field(body, 'otp_secret')
-    raw = hidden_field(body, 'otp_raw_secret')
-    token = hidden_field(body, '_csrf')
-    expect(secret).not_to be_nil
-    params = { otp_secret: secret, otp: ROTP::TOTP.new(secret).now, password: password, _csrf: token }
-    params[:otp_raw_secret] = raw if raw
-    post '/otp-setup', params
-    expect(last_response).to be_redirect, "otp-setup failed: #{last_response.status}"
-    secret
-  end
 
   it 'redirects anonymous requests to the login form' do
     get '/'
@@ -116,7 +79,7 @@ RSpec.describe RodauthAdmin::App do
     complete_otp_setup!
     get '/'
     expect(last_response.status).to eq(200)
-    expect(last_response.body).to include('Heartbeat')
+    expect(last_response.body).to include('Auth stats')
     expect(last_response.body).to include(email)
     expect(last_response.body).to include('extid-op-1')
   end
