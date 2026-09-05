@@ -20,15 +20,24 @@
 -- Neither role can CREATE, ALTER, DROP or TRUNCATE anything.
 --
 -- Run as a superuser or as ots_migrator (the database owner) AFTER
--- `rake db:migrate` has created the admin tables. Replace CHANGE_ME first.
+-- `rake db:migrate` has created the admin tables. The database name and the
+-- two passwords are psql variables rather than placeholders to edit: they
+-- are values, not SQL, so passing them keeps a password containing '/', '&'
+-- or a quote from being mangled or from ending up in the file.
+--
+--   psql -d postgres -v ON_ERROR_STOP=1 \
+--        -v dbname=onetime_authdb \
+--        -v app_pw="$APP_ROLE_PASSWORD" -v ro_pw="$RO_ROLE_PASSWORD" \
+--        -f db/grants/postgres/rodauth_admin_roles.sql
+--
 -- This file is the grant list; review changes to it like code.
 
-CREATE ROLE rodauth_admin_app LOGIN PASSWORD 'CHANGE_ME_APP_ROLE_PASSWORD';
-CREATE ROLE rodauth_admin_ro  LOGIN PASSWORD 'CHANGE_ME_RO_ROLE_PASSWORD';
+CREATE ROLE rodauth_admin_app LOGIN PASSWORD :'app_pw';
+CREATE ROLE rodauth_admin_ro  LOGIN PASSWORD :'ro_pw';
 
-GRANT CONNECT ON DATABASE onetime_authdb TO rodauth_admin_app, rodauth_admin_ro;
+GRANT CONNECT ON DATABASE :"dbname" TO rodauth_admin_app, rodauth_admin_ro;
 
-\c onetime_authdb
+\c :"dbname"
 
 GRANT USAGE ON SCHEMA public TO rodauth_admin_app, rodauth_admin_ro;
 
@@ -48,10 +57,28 @@ GRANT SELECT ON accounts, account_statuses TO rodauth_admin_app;
 -- hand every role in the database an oracle over the hash table both runtime
 -- roles are deliberately denied SELECT on. Revoke first, then grant to the
 -- one role that needs it.
-REVOKE ALL ON FUNCTION rodauth_get_salt(bigint) FROM PUBLIC;
-REVOKE ALL ON FUNCTION rodauth_valid_password_hash(bigint, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION rodauth_get_salt(bigint) TO rodauth_admin_app;
-GRANT EXECUTE ON FUNCTION rodauth_valid_password_hash(bigint, text) TO rodauth_admin_app;
+-- Guarded with to_regprocedure: on an authdb without the functions, a bare
+-- REVOKE aborts the script half-applied, which is the one outcome a
+-- privilege file must never produce. Skipping is correct there — with no
+-- functions there is no oracle to revoke and Rodauth falls back to the hash
+-- table (see the commented GRANT below).
+DO $$
+BEGIN
+  IF to_regprocedure('rodauth_get_salt(bigint)') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION rodauth_get_salt(bigint) FROM PUBLIC;
+    GRANT EXECUTE ON FUNCTION rodauth_get_salt(bigint) TO rodauth_admin_app;
+  ELSE
+    RAISE NOTICE 'rodauth_get_salt(bigint) not present; skipping its grants';
+  END IF;
+
+  IF to_regprocedure('rodauth_valid_password_hash(bigint, text)') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION rodauth_valid_password_hash(bigint, text) FROM PUBLIC;
+    GRANT EXECUTE ON FUNCTION rodauth_valid_password_hash(bigint, text) TO rodauth_admin_app;
+  ELSE
+    RAISE NOTICE 'rodauth_valid_password_hash(bigint, text) not present; skipping its grants';
+  END IF;
+END
+$$;
 -- GRANT SELECT ON account_password_hashes TO rodauth_admin_app;  -- fallback only
 
 -- lockout feature: failure counters and lockout rows

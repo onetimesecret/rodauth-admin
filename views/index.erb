@@ -65,13 +65,17 @@
     <div class="stat wide">
       <h3>Status breakdown</h3>
       <table>
-        <tr><th>Status</th><th>Accounts</th></tr>
+        <tr><th>Status id</th><th>Status</th><th>Accounts</th></tr>
         <% @stats.status_breakdown.each do |status| %>
-          <tr><td><%= status[:name] %></td><td><%= status[:count] %></td></tr>
+          <tr><td><%= status[:id] || '—' %></td><td><%= status[:name] %></td><td><%= status[:count] %></td></tr>
         <% end %>
       </table>
       <p class="footnote">Labels are read from <code>account_statuses</code>; the 1/2/3 mapping is seed data, not a
         contract.</p>
+      <% if @stats.status_breakdown.any? { |s| s[:id].nil? } %>
+        <p class="footnote">The <code>unknown</code> row is accounts whose <code>status_id</code> has no
+          <code>account_statuses</code> row, kept so the breakdown still sums to the account total.</p>
+      <% end %>
     </div>
   </div>
 <% else %>

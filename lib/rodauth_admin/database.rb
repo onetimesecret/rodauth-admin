@@ -3,6 +3,7 @@
 # frozen_string_literal: true
 
 require 'sequel'
+require 'timeout'
 
 require_relative 'env'
 
@@ -24,6 +25,29 @@ module RodauthAdmin
     ADMIN_TABLES = %i[admin_operators admin_actions].freeze
     # The tenant app's migrations own :schema_info in this database.
     ADMIN_SCHEMA_TABLE = :admin_schema_info
+
+    # What "the authdb is unreachable" actually looks like, and nothing
+    # else. Read paths degrade to an explanatory panel on these (Stats,
+    # AccountList) — so the list must stay narrow: a NoMethodError or a
+    # NameError caught here would be reported to an incident responder as
+    # "the database is down", which is the worst possible time to be lied
+    # to. Sequel::DatabaseConnectionError and Sequel::PoolTimeout are
+    # subclasses of Sequel::DatabaseError today; both are named so a
+    # future reparenting cannot silently narrow this.
+    UNAVAILABLE_ERRORS = [
+      Sequel::DatabaseError,
+      Sequel::DatabaseConnectionError,
+      Sequel::PoolTimeout,
+      IOError,
+      SystemCallError,
+      Timeout::Error
+    ].freeze
+
+    # The one-line "why" a read path is showing a degraded panel. First line
+    # only: a PostgreSQL connection error's message is a paragraph.
+    def self.failure_reason(error)
+      "#{error.class}: #{error.message.to_s.lines.first.to_s.strip}"
+    end
 
     MUTEX = Mutex.new
     private_constant :MUTEX

@@ -6,6 +6,8 @@ require 'sequel'
 require 'rodauth/migrations'
 require 'rodauth/tools'
 
+require_relative 'env'
+
 module RodauthAdmin
   # The production authdb schema, expressed as the rodauth-tools feature
   # list it was generated from plus the handful of columns the tenant app
@@ -49,9 +51,18 @@ module RodauthAdmin
 
     module_function
 
-    # Create every production authdb table in +db+. Idempotent guard: refuses
-    # to run against a database that already has an accounts table.
+    # Create every production authdb table in +db+. Two guards, both before
+    # any DDL: never in production (this module builds development and test
+    # databases; production's schema is owned by the tenant app's
+    # migrations), and never over an existing accounts table.
+    #
+    # The refusal lives here rather than only in the Rakefile because the
+    # rake task is not the only caller — spec_helper builds through this
+    # method too — and a guard that a second caller can walk around is not
+    # a guard. The Rakefile keeps its abort as the friendly CLI message.
     def build!(db)
+      raise ConfigurationError, 'refusing to build an authdb with RACK_ENV=production' if Env.production?
+
       if db.table_exists?(:accounts)
         raise ConfigurationError,
               'authdb already has an accounts table; refusing to rebuild'

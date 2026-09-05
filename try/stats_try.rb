@@ -97,3 +97,52 @@ down = RodauthAdmin::Stats.cached(ttl: 60, db: @broken, now: @now)
 back = RodauthAdmin::Stats.cached(ttl: 60, db: @db, now: @now)
 [down.available, back.available, back.total_accounts]
 #=> [false, true, 5]
+
+## A bug in the query layer is not "the authdb is unreachable": it propagates
+class BuggyDb
+  def [](_table) = raise(NoMethodError, 'undefined method for nil')
+end
+begin
+  RodauthAdmin::Stats.call(db: BuggyDb.new, now: @now)
+rescue NoMethodError
+  :propagated
+end
+#=> :propagated
+
+## Accounts whose status_id has no account_statuses row become one residual row
+# Production's accounts.status_id has no foreign key to account_statuses, so
+# this state is reachable there; SQLite needs foreign_keys off to model it.
+@unconstrained = Sequel.connect('sqlite:/', max_connections: 1)
+RodauthAdmin::AuthdbSchema.build!(@unconstrained)
+@unconstrained.run('PRAGMA foreign_keys = OFF')
+@unconstrained[:accounts].insert(email: 'ok@example.com', status_id: 2)
+@unconstrained[:accounts].insert(email: 'ghost@example.com', status_id: 99)
+@unconstrained[:accounts].insert(email: 'ghost2@example.com', status_id: 98)
+r = RodauthAdmin::Stats.call(db: @unconstrained, now: @now)
+[r.status_breakdown.last, r.status_breakdown.sum { |s| s[:count] } == r.total_accounts]
+#=> [{ id: nil, name: 'unknown', count: 2 }, true]
+
+## With every status known, no residual row is appended
+RodauthAdmin::Stats.call(db: @db, now: @now).status_breakdown.map { |s| s[:id] }
+#=> [1, 2, 3]
+
+## A slow query does not hold the cache lock: other threads keep reading
+class SlowDb
+  def initialize(inner) = @inner = inner
+
+  def [](table)
+    sleep 0.3
+    @inner[table]
+  end
+end
+RodauthAdmin::Stats.reset_cache!
+warm = RodauthAdmin::Stats.cached(ttl: 300, db: @db, now: @now)
+slow = Thread.new { RodauthAdmin::Stats.cached(ttl: 0, db: SlowDb.new(@db), now: @now) }
+sleep 0.05
+started = Time.now
+source = RodauthAdmin::Stats.customer_count_source
+hit = RodauthAdmin::Stats.cached(ttl: 300, db: @db, now: @now)
+elapsed = Time.now - started
+slow.join
+[source, hit.equal?(warm), elapsed < 0.2]
+#=> [RodauthAdmin::Stats::NullSource, true, true]

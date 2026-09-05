@@ -104,3 +104,37 @@ end
 r = RodauthAdmin::AccountList.call(filter: :locked, db: @broken, now: @now)
 [r.available, r.total, r.rows, r.pages, r.next_page, r.reason.include?('authdb is down')]
 #=> [false, nil, [], nil, nil, true]
+
+## A bug in row building is not "the authdb is unreachable": it propagates
+class BuggyDb
+  def [](_table) = raise(NoMethodError, 'undefined method for nil')
+end
+begin
+  RodauthAdmin::AccountList.call(filter: :orphaned, db: BuggyDb.new, now: @now)
+rescue NoMethodError
+  :propagated
+end
+#=> :propagated
+
+## A page past the end clamps to the last page rather than rendering nothing
+r = RodauthAdmin::AccountList.call(filter: :orphaned, page: 999_999, per_page: 2, db: @db, now: @now)
+[r.page, r.pages, r.rows.map(&:email), r.next_page, r.prev_page]
+#=> [2, 2, ["u5@example.com"], nil, 1]
+
+## An empty list keeps page 1 rather than clamping to zero
+r = RodauthAdmin::AccountList.call(filter: :locked, page: 5, db: @db, now: @now + 86_400)
+[r.total, r.page, r.pages]
+#=> [0, 5, 1]
+
+## per_page: 0 clamps to 1 rather than dividing by zero
+r = RodauthAdmin::AccountList.call(filter: :orphaned, per_page: 0, db: @db, now: @now)
+[r.per_page, r.rows.size, r.pages]
+#=> [1, 1, 3]
+
+## An Array filter (Rack's ?filter[]=locked) is refused, not crashed on
+begin
+  RodauthAdmin::AccountList.call(filter: ['locked'], db: @db, now: @now)
+rescue RodauthAdmin::AccountList::InvalidFilter
+  :refused
+end
+#=> :refused

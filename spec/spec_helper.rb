@@ -20,6 +20,7 @@
 require 'fileutils'
 require 'securerandom'
 require 'tmpdir'
+require 'uri'
 
 ENV['RACK_ENV'] = 'test'
 ENV['AUTH_SECRET'] = "test-hmac-secret-#{'x' * 48}"
@@ -28,7 +29,41 @@ ENV.delete('ARGON2_SECRET')
 
 PROVISIONED_DATABASE = !ENV['ADMIN_DATABASE_URL'].to_s.strip.empty?
 
+# The suite's `before` hook DELETEs every account table through the migrator
+# credential, which in the provisioned mode is the schema owner. RACK_ENV=test
+# is not a guard: it is set two lines up, unconditionally, by this very file.
+# So the database has to name itself as disposable — or the operator has to
+# say so explicitly, once, in the environment.
+SCRATCH_DATABASE_NAME = /(^|_)(test|ci|scratch)($|_)/
+DESTRUCTIVE_OVERRIDE = 'RODAUTH_ADMIN_ALLOW_DESTRUCTIVE_SPECS'
+
+def scratch_database!(url)
+  return if ENV[DESTRUCTIVE_OVERRIDE] == '1'
+
+  # An unparseable URL (a password with unescaped punctuation, say) is not a
+  # licence to proceed: no name means no proof, so the refusal stands.
+  name = begin
+    URI.parse(url).path.to_s.split('/').last.to_s
+  rescue URI::InvalidURIError
+    ''
+  end
+  return if name.match?(SCRATCH_DATABASE_NAME)
+
+  abort <<~REFUSAL
+    Refusing to run the specs against ADMIN_DATABASE_URL database #{name.inspect}.
+
+    This suite truncates every account table (accounts and every account_*
+    child) plus admin_operators before each example, through the migrator
+    credential. It is only ever safe against a scratch database.
+
+    Name the database so it says so (matching #{SCRATCH_DATABASE_NAME.source},
+    e.g. onetime_authdb_ci), or set #{DESTRUCTIVE_OVERRIDE}=1 if you have
+    genuinely decided this database is disposable.
+  REFUSAL
+end
+
 if PROVISIONED_DATABASE
+  scratch_database!(ENV.fetch('ADMIN_DATABASE_URL'))
   SCRATCH_DIR = nil
   # A caller who sets only ADMIN_DATABASE_URL gets the single-credential
   # behaviour it had before; the Postgres lane sets all three.

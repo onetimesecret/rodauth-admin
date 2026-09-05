@@ -4,6 +4,7 @@
 
 require 'roda'
 require 'json'
+require 'erb'
 
 require_relative 'env'
 require_relative 'database'
@@ -106,7 +107,10 @@ module RodauthAdmin
       base = Env.colonel_console_url
       return nil if base.nil? || external_id.nil? || external_id.to_s.empty?
 
-      "#{base}/colonel/customers/#{external_id}"
+      # external_id is authdb data, not a constant: url_encode keeps a value
+      # containing '/', '?' or '#' inside the path segment it belongs to
+      # instead of letting it rewrite the link's target.
+      "#{base}/colonel/customers/#{ERB::Util.url_encode(external_id)}"
     end
 
     # "12 (3%)" — the denominator is total_accounts, which can be zero on an

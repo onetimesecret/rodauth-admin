@@ -77,20 +77,23 @@ jobs:
       # URLs are three different roles, not that the passwords are secret.
       APP_ROLE_PASSWORD: ci_app_role
       RO_ROLE_PASSWORD: ci_ro_role
+      # Named for what it is. spec_helper refuses to run its truncating
+      # fixtures against a database whose name does not say it is disposable
+      # (test/ci/scratch), and the grant file takes the name as a variable.
+      AUTHDB_NAME: onetime_authdb_ci
+      ADMIN_DATABASE_URL: postgresql://rodauth_admin_app:ci_app_role@localhost:5432/onetime_authdb_ci
+      ADMIN_DATABASE_URL_RO: postgresql://rodauth_admin_ro:ci_ro_role@localhost:5432/onetime_authdb_ci
       # The superuser stands in for ots_migrator: it owns the schema and is
       # the only credential that ever runs DDL.
-      ADMIN_DATABASE_URL_MIGRATIONS: postgresql://postgres:ci_superuser@localhost:5432/onetime_authdb
-      ADMIN_DATABASE_URL: postgresql://rodauth_admin_app:ci_app_role@localhost:5432/onetime_authdb
-      ADMIN_DATABASE_URL_RO: postgresql://rodauth_admin_ro:ci_ro_role@localhost:5432/onetime_authdb
+      ADMIN_DATABASE_URL_MIGRATIONS: postgresql://postgres:ci_superuser@localhost:5432/onetime_authdb_ci
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
         with:
           bundler-cache: true
 
-      # The grant file names the production database, so CI uses that name.
       - name: Create the authdb
-        run: psql -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE onetime_authdb'
+        run: psql -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${AUTHDB_NAME}"
 
       # Rodauth's tables from the rodauth-tools templates, the tenant app's
       # deltas, and (PostgreSQL only) the two SECURITY DEFINER password
@@ -101,15 +104,18 @@ jobs:
       - name: Migrate the admin tables
         run: bundle exec rake db:migrate
 
-      # One obvious step: substitute the two CHANGE_ME placeholders and apply
-      # the file exactly as an operator would. It is reviewed like code, so it
-      # is executed like code. \c inside the file switches to the authdb.
+      # The file is applied verbatim, exactly as db/README.md tells an
+      # operator to apply it: the database name and the two passwords are
+      # psql variables, so no text substitution touches the SQL and a
+      # password containing '/' or '&' cannot corrupt it.
+      # \c inside the file switches to the authdb.
       - name: Apply the grant file
         run: |
-          sed -e "s/CHANGE_ME_APP_ROLE_PASSWORD/${APP_ROLE_PASSWORD}/" \
-              -e "s/CHANGE_ME_RO_ROLE_PASSWORD/${RO_ROLE_PASSWORD}/" \
-              db/grants/postgres/rodauth_admin_roles.sql > "${RUNNER_TEMP}/grants.sql"
-          psql -d postgres -v ON_ERROR_STOP=1 -f "${RUNNER_TEMP}/grants.sql"
+          psql -d postgres -v ON_ERROR_STOP=1 \
+               -v dbname="${AUTHDB_NAME}" \
+               -v app_pw="${APP_ROLE_PASSWORD}" \
+               -v ro_pw="${RO_ROLE_PASSWORD}" \
+               -f db/grants/postgres/rodauth_admin_roles.sql
 
       # Tryouts build their own in-process Sequel.sqlite databases and are
       # unaffected by the URLs above; they run here to keep the lane a full

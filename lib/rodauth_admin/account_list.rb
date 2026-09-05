@@ -35,6 +35,11 @@ module RodauthAdmin
       Sequel[:account_login_failures][:number].as(:login_failures)
     ].freeze
 
+    # The two outcomes of the database-touching half of a call, split out so
+    # the degradation rescue can wrap the query and nothing else.
+    Page = Data.define(:total, :page, :records)
+    QueryFailure = Data.define(:filter, :page, :per_page, :reason)
+
     Row = Data.define(
       :id, :email, :status_id, :status, :external_id, :created_at,
       :lockout_deadline, :login_failures
@@ -48,15 +53,11 @@ module RodauthAdmin
       end
 
       def next_page
-        return nil unless available && pages && page < pages
-
-        page + 1
+        page + 1 if available && pages && page < pages
       end
 
       def prev_page
-        return nil unless available && page > 1
-
-        page - 1
+        page - 1 if available && page > 1
       end
     end
 
@@ -69,14 +70,14 @@ module RodauthAdmin
         per_page = clamp(per_page, PER_PAGE_DEFAULT, 1, PER_PAGE_MAX)
         page     = [coerce(page, 1), 1].max
 
-        fetch(filter, page, per_page, db, now)
-      rescue InvalidFilter
-        raise
-      # Same net as Stats.call: a blinking authdb is an explanatory state,
-      # never a 500.
-      rescue StandardError => e
-        RodauthAdmin.logger.warn('authdb account list unavailable', e)
-        unavailable(filter, page, per_page, "#{e.class}: #{e.message.to_s.lines.first.to_s.strip}")
+        outcome = query(filter, page, per_page, db, now)
+        return unavailable(outcome) if outcome.is_a?(QueryFailure)
+
+        # Row building is deliberately outside the query rescue: a bug in
+        # build_row is a bug, and must not be reported as an outage.
+        rows = outcome.records.map { |r| build_row(filter, r) }.freeze
+        Result.new(available: true, reason: nil, filter: filter, page: outcome.page,
+                   per_page: per_page, total: outcome.total, rows: rows).freeze
       end
 
       private
@@ -92,18 +93,31 @@ module RodauthAdmin
 
       def clamp(value, default, min, max) = coerce(value, default).clamp(min, max)
 
-      def fetch(filter, page, per_page, db, now)
+      # Everything that touches the database, and only that. Same net as
+      # Stats.call: a blinking authdb is an explanatory state, never a 500 —
+      # and never a mislabelled bug.
+      def query(filter, page, per_page, db, now)
         base = filter == :locked ? locked_dataset(db, now) : orphaned_dataset(db)
         total = base.count
-        rows = base.limit(per_page, (page - 1) * per_page).all.map { |r| build_row(filter, r) }.freeze
-        Result.new(available: true, reason: nil, filter: filter, page: page,
-                   per_page: per_page, total: total, rows: rows).freeze
+        page = clamp_page(page, total, per_page)
+        Page.new(total: total, page: page, records: base.limit(per_page, (page - 1) * per_page).all)
+      rescue *Database::UNAVAILABLE_ERRORS => e
+        RodauthAdmin.logger.warn('authdb account list unavailable', e)
+        QueryFailure.new(filter: filter, page: page, per_page: per_page,
+                         reason: Database.failure_reason(e))
+      end
+
+      # An out-of-range page shows the last page rather than an empty table
+      # with a "previous" link into nothing: ?page=999999 is a stale
+      # bookmark or a shrunken list, not an error worth a screen.
+      def clamp_page(page, total, per_page)
+        total.zero? ? page : page.clamp(1, [(total.to_f / per_page).ceil, 1].max)
       end
 
       # Lockout rows linger after they expire (Rodauth does not delete them
-      # eagerly), so deadline is filtered on every read.
-      # (BooleanExpression rather than `deadline > now`: the rubocop Yoda
-      # cop misreads a Sequel comparison as a reversed Ruby one.)
+      # eagerly), so deadline is filtered on every read. BooleanExpression
+      # rather than `deadline > now`: the rubocop Yoda cop misreads a Sequel
+      # comparison as a reversed Ruby one.
       def locked_dataset(db, now)
         locked_joins(db)
           .where(Sequel::SQL::BooleanExpression.new(:>, LOCKOUT_DEADLINE, now))
@@ -119,7 +133,7 @@ module RodauthAdmin
       end
 
       # WHERE external_id IS NULL is a seq scan at 200k rows; acceptable at
-      # this size. Add a partial index if accounts grows, don't pre-build it.
+      # this size. Add a partial index if accounts grows.
       def orphaned_dataset(db)
         db[:accounts]
           .left_join(:account_statuses, id: Sequel[:accounts][:status_id])
@@ -129,8 +143,7 @@ module RodauthAdmin
       end
 
       # created_at is conditional: production's accounts has timestamps
-      # (authdb_schema.rb), a bare rodauth-tools accounts table does not, and
-      # a missing column reports nil rather than failing the query.
+      # (authdb_schema.rb), a bare rodauth-tools table does not.
       def account_columns(db)
         return ROW_COLUMNS unless db[:accounts].columns.include?(:created_at)
 
@@ -147,9 +160,9 @@ module RodauthAdmin
         ).freeze
       end
 
-      def unavailable(filter, page, per_page, reason)
-        Result.new(available: false, reason: reason, filter: filter, page: page,
-                   per_page: per_page, total: nil, rows: [].freeze).freeze
+      def unavailable(failure)
+        Result.new(available: false, reason: failure.reason, filter: failure.filter,
+                   page: failure.page, per_page: failure.per_page, total: nil, rows: [].freeze).freeze
       end
     end
   end

@@ -69,21 +69,29 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
         .to raise_error(Sequel::DatabaseError, /permission denied/)
     end
 
+    # Scoped to one fixture row on purpose. An unqualified UPDATE/DELETE
+    # would pass this example even if the statement were merely rejected
+    # for some other reason, and would rewrite the whole table the day the
+    # grant regressed. WHERE id = <fixture> both narrows the blast radius
+    # and proves the refusal is about privilege on a row that exists.
     it 'cannot write accounts' do
+      fixture_id = migrator[:accounts].insert(email: 'ro-target@example.com', status_id: 2)
+
       expect { ro[:accounts].insert(email: 'nope@example.com', status_id: 2) }
         .to raise_error(Sequel::DatabaseError, /permission denied/)
-      expect { ro[:accounts].update(status_id: 3) }
+      expect { ro[:accounts].where(id: fixture_id).update(status_id: 3) }
         .to raise_error(Sequel::DatabaseError, /permission denied/)
-      expect { ro[:accounts].delete }
+      expect { ro[:accounts].where(id: fixture_id).delete }
         .to raise_error(Sequel::DatabaseError, /permission denied/)
+      expect(migrator[:accounts].where(id: fixture_id).get(:status_id)).to eq(2)
     end
 
     it 'cannot write admin_actions' do
       expect { ro[:admin_actions].insert(action: 'x', actor: 'x', reason: 'x') }
         .to raise_error(Sequel::DatabaseError, /permission denied/)
-      expect { ro[:admin_actions].update(reason: 'rewritten') }
+      expect { ro[:admin_actions].where(action: 'grants_spec_ro').update(reason: 'rewritten') }
         .to raise_error(Sequel::DatabaseError, /permission denied/)
-      expect { ro[:admin_actions].delete }
+      expect { ro[:admin_actions].where(action: 'grants_spec_ro').delete }
         .to raise_error(Sequel::DatabaseError, /permission denied/)
     end
   end

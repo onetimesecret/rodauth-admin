@@ -12,9 +12,9 @@ production grants are not yet applied.
 ## Read first
 
 - [`docs/CHARTER.md`](docs/CHARTER.md) — why this is its own codebase, what it
-  owns, architecture, five-phase plan, open questions. Revision 2 resolves
-  operator identity: operators sign in with their **production** account,
-  gated by an allowlist.
+  owns, architecture, five-phase plan, open questions. Revision 3; revision 2
+  resolved operator identity: operators sign in with their **production**
+  account, gated by an allowlist.
 - [`docs/design/database-credentials.md`](docs/design/database-credentials.md)
   — one database, three credentials: runtime, read-only, and the tenant
   app's existing migrator. [`db/README.md`](db/README.md) has the
@@ -45,7 +45,7 @@ lib/rodauth_admin/
   env.rb                     every ENV read; unset RACK_ENV means production
   database.rb                app / readonly / migrator connections
   auth.rb                    the Rodauth instance (login, otp, lockout, audit_logging)
-  app.rb                     the Roda app: healthz, rodauth routes, allowlist gate, heartbeat
+  app.rb                     the Roda app: healthz, rodauth routes, allowlist gate, stats board, account lists
   allowlist.rb               admin_operators reads and audited writes
   audit.rb                   admin_actions writer
   stats.rb                   aggregate authdb counts, briefly cached, degrades to unavailable
@@ -53,7 +53,7 @@ lib/rodauth_admin/
   authdb_schema.rb           production authdb shape as a rodauth-tools feature list
 db/migrate/                  the admin tables (Sequel migrations, own bookkeeping table)
 db/grants/postgres/          the two runtime roles and every grant
-views/                       layout + heartbeat; Rodauth renders its own forms
+views/                       layout, stats board, account lists; Rodauth renders its own forms
 try/, spec/                  tryouts (units) and RSpec (front-door flows)
 ```
 
@@ -74,7 +74,11 @@ bundle exec rake 'operators:add[you@example.com]' REASON="bootstrap operator"
 bundle exec rackup                # http://localhost:9292
 ```
 
-Sign in, enrol TOTP when prompted, and you should see the heartbeat.
+Sign in, enrol TOTP when prompted, and you should see the stats board.
+
+`COLONEL_CONSOLE_URL` is optional: set it to the tenant app's base URL and
+each account's `external_id` renders as a deep link into the colonel console
+(nothing is ever requested from it).
 
 ```bash
 bundle exec rake test             # tryouts + rspec (SQLite)

@@ -48,41 +48,50 @@ module RodauthAdmin
     )
 
     CACHE_MUTEX = Mutex.new
-    private_constant :CACHE_MUTEX
+    # A separate lock for the pluggable source: #cached computes with
+    # CACHE_MUTEX released and the computation reads the source, so sharing
+    # one mutex would either deadlock (Ruby's Mutex is not reentrant) or
+    # force the query back inside the cache lock.
+    SOURCE_MUTEX = Mutex.new
+    private_constant :CACHE_MUTEX, :SOURCE_MUTEX
 
     class << self
       def customer_count_source
-        CACHE_MUTEX.synchronize { customer_source }
+        SOURCE_MUTEX.synchronize { customer_source }
       end
 
       def customer_count_source=(source)
-        CACHE_MUTEX.synchronize { store_customer_source(source || NullSource) }
+        SOURCE_MUTEX.synchronize { store_customer_source(source || NullSource) }
       end
 
       # @return [Result] never raises
       def call(db: Database.readonly, now: Time.now)
         compute(db, now)
-      # Sequel::DatabaseError covers query failures and
-      # Sequel::DatabaseConnectionError connection ones, but a dead socket
-      # can surface as plain IOError/SystemCallError too, so the net is
-      # StandardError: a stats board must never 500.
-      rescue StandardError => e
+      # Exactly the outage errors (Database::UNAVAILABLE_ERRORS), never a
+      # bare StandardError: the board must not 500 when the authdb blinks,
+      # but reporting a NoMethodError in this file as "authdb unreachable"
+      # would send an incident responder after the wrong system.
+      rescue *Database::UNAVAILABLE_ERRORS => e
         RodauthAdmin.logger.warn('authdb stats unavailable', e)
-        unavailable("#{e.class}: #{e.message.to_s.lines.first.to_s.strip}", now)
+        unavailable(Database.failure_reason(e), now)
       end
 
       # A brief process-local memo: the stats board is nine counts against
       # ~200k rows and must not be recomputed on every nav render. An
       # unavailable result is never cached, so the next request retries.
+      # The mutex is held only for the memo read and the memo write, never
+      # across the nine COUNTs: a slow or hanging authdb would otherwise
+      # queue every other request behind it, turning a degraded stats board
+      # into a stalled application. Two threads that miss together may both
+      # compute, which is a duplicated read-only query — much cheaper than
+      # the stall it replaces.
       def cached(ttl: 60, db: Database.readonly, now: Time.now)
-        CACHE_MUTEX.synchronize do
-          hit = read_cache
-          return hit[:result] if hit && hit[:result].available && (now - hit[:at]) < ttl
+        hit = CACHE_MUTEX.synchronize { read_cache }
+        return hit[:result] if fresh?(hit, ttl, now)
 
-          result = call(db: db, now: now)
-          store_cache(result, now) if result.available
-          result
-        end
+        result = call(db: db, now: now)
+        CACHE_MUTEX.synchronize { store_cache(result, now) } if result.available
+        result
       end
 
       def reset_cache!
@@ -92,7 +101,11 @@ module RodauthAdmin
 
       private
 
-      # rubocop:disable ThreadSafety/ClassInstanceVariable -- guarded by CACHE_MUTEX
+      def fresh?(hit, ttl, now)
+        !hit.nil? && hit[:result].available && (now - hit[:at]) < ttl
+      end
+
+      # rubocop:disable ThreadSafety/ClassInstanceVariable -- guarded by CACHE_MUTEX / SOURCE_MUTEX
       def read_cache = @cache
       def customer_source = (@customer_source ||= NullSource)
       def store_customer_source(source) = @customer_source = source
@@ -116,7 +129,7 @@ module RodauthAdmin
 
       def account_counts(db)
         total = db[:accounts].count
-        customers = customer_source.call
+        customers = customer_count_source.call
         {
           total_accounts: total,
           # A seq scan at 200k rows, which is acceptable at this size. If
@@ -140,11 +153,21 @@ module RodauthAdmin
         }
       end
 
+      # accounts.status_id has no foreign key to account_statuses in
+      # production, so a row can carry a status id the labels table does not
+      # know (bad seed data, a status deleted, a NULL). Those accounts are
+      # still accounts: dropping them silently would make the breakdown fail
+      # to sum to total_accounts, and a breakdown that does not add up is
+      # worse than an ugly row. They are collected into one residual row,
+      # emitted only when it is non-empty.
       def status_breakdown(db)
         counts = db[:accounts].group_and_count(:status_id).to_hash(:status_id, :count)
-        db[:account_statuses].order(:id).select_map(%i[id name]).map do |id, name|
-          { id: id, name: name, count: counts.fetch(id, 0) }.freeze
-        end.freeze
+        known = db[:account_statuses].order(:id).select_map(%i[id name]).map do |id, name|
+          { id: id, name: name, count: counts.delete(id) || 0 }.freeze
+        end
+        residual = counts.values.sum
+        known << { id: nil, name: 'unknown', count: residual }.freeze if residual.positive?
+        known.freeze
       end
 
       def unavailable(reason, now)

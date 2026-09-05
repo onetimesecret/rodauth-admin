@@ -156,6 +156,19 @@ RSpec.describe RodauthAdmin::App do
       get '/accounts?filter=locked'
       expect(last_response.body).to include('href="https://console.example.com/colonel/customers/extid-locked"')
     end
+
+    # external_id is authdb data. A value carrying '/' or '?' would otherwise
+    # rewrite the link's path or start a query string on the colonel console.
+    it 'url-escapes an external id that could rewrite the link target' do
+      allow(RodauthAdmin::Env).to receive(:colonel_console_url).and_return('https://console.example.com')
+      weird = create_account(email: 'weird@example.com', password: password,
+                             external_id: 'a/b?c')
+      lock!(weird, Time.now + 3600)
+      sign_in_operator!
+      get '/accounts?filter=locked'
+      expect(last_response.body).to include('href="https://console.example.com/colonel/customers/a%2Fb%3Fc"')
+      expect(last_response.body).not_to include('customers/a/b?c')
+    end
   end
 
   describe 'the orphaned list' do
@@ -196,6 +209,17 @@ RSpec.describe RodauthAdmin::App do
       expect(last_response.body).to include('href="/accounts?filter=orphaned&amp;page=1&amp;per_page=1"')
     end
 
+    # A stale bookmark or a list that shrank: show the last page, not an
+    # empty table with a "previous" link into nothing.
+    it 'clamps a page past the end to the last page' do
+      3.times { |i| create_account(email: "far#{i}@example.com", password: password, external_id: nil) }
+      sign_in_operator!
+      get '/accounts?filter=orphaned&page=999999&per_page=1'
+      expect(last_response.status).to eq(200)
+      expect(last_response.body).to include('page 4 of 4')
+      expect(last_response.body).not_to include('next &rarr;')
+    end
+
     it 'clamps per_page to the cap, visibly' do
       sign_in_operator!
       get '/accounts?filter=orphaned&per_page=1000'
@@ -220,6 +244,25 @@ RSpec.describe RodauthAdmin::App do
       expect(last_response.status).to eq(400)
       expect(last_response.body).to include('locked', 'orphaned')
       expect(last_response.body).to include('Unknown account filter')
+    end
+
+    # Rack turns ?filter[]=locked into an Array, which has no #to_sym: the
+    # whitelist must refuse it as a filter rather than 500 on the coercion.
+    it 'refuses an array filter with a 400 rather than a 500' do
+      sign_in_operator!
+      get '/accounts?filter[]=locked'
+      expect(last_response.status).to eq(400)
+      expect(last_response.body).to include('Unknown account filter')
+    end
+
+    # The refused filter is echoed back to the operator, so it is operator
+    # input rendered into HTML — escaped, always.
+    it 'html-escapes the filter it reflects back' do
+      sign_in_operator!
+      get '/accounts?filter=%3Cb%3Ex'
+      expect(last_response.status).to eq(400)
+      expect(last_response.body).to include('&lt;b&gt;x')
+      expect(last_response.body).not_to include('<b>x')
     end
 
     it 'refuses a missing filter the same way, rather than guessing a default' do
