@@ -7,6 +7,8 @@
 # These checks pin the shape against the capability table in CHARTER §3.
 
 require 'sequel'
+ENV['RACK_ENV'] = 'test'
+require_relative '../lib/rodauth_admin'
 require_relative '../lib/rodauth_admin/env'
 require_relative '../lib/rodauth_admin/authdb_schema'
 
@@ -55,3 +57,18 @@ end
 ## tables lists what build! created (order: templates first, then deltas)
 RodauthAdmin::AuthdbSchema.tables.last
 #=> :account_identities
+
+## build! refuses to run in production, before touching the database
+class UntouchableDb
+  def method_missing(name, *) = raise("production authdb was touched: #{name}")
+  def respond_to_missing?(*) = true
+end
+ENV['RACK_ENV'] = 'production'
+begin
+  RodauthAdmin::AuthdbSchema.build!(UntouchableDb.new)
+rescue RodauthAdmin::ConfigurationError => e
+  e.message
+ensure
+  ENV['RACK_ENV'] = 'test'
+end
+#=> 'refusing to build an authdb with RACK_ENV=production'

@@ -6,22 +6,54 @@
 # built from the rodauth-tools templates (the same shape as production) plus
 # the migrated admin tables. ENV must be set before lib/rodauth_admin loads,
 # because RodauthAdmin::Auth's table_guard connects at class-definition time.
+#
+# Two modes:
+#
+#   default (local, and the `test` CI job) — a scratch SQLite file plays all
+#     three credentials, and this file builds and migrates it.
+#   pre-provisioned (the `test-postgres` CI job) — ADMIN_DATABASE_URL is
+#     already set in ENV, pointing at a real PostgreSQL authdb that CI built,
+#     migrated and granted with three genuinely different roles. Nothing is
+#     built here; the schema steps below are skipped when the schema exists,
+#     which is also what makes a re-run against the same database work.
 
 require 'fileutils'
 require 'securerandom'
 require 'tmpdir'
+require 'uri'
 
 ENV['RACK_ENV'] = 'test'
 ENV['AUTH_SECRET'] = "test-hmac-secret-#{'x' * 48}"
 ENV['RODAUTH_ADMIN_SESSION_SECRET'] = SecureRandom.hex(64)
 ENV.delete('ARGON2_SECRET')
 
-SCRATCH_DIR = File.join(Dir.tmpdir, "rodauth-admin-spec-#{Process.pid}")
-FileUtils.mkdir_p(SCRATCH_DIR)
-# One SQLite file plays all three roles (docs/design/database-credentials.md).
-ENV['ADMIN_DATABASE_URL'] = "sqlite://#{SCRATCH_DIR}/authdb.sqlite3"
-ENV['ADMIN_DATABASE_URL_RO'] = ENV.fetch('ADMIN_DATABASE_URL')
-ENV['ADMIN_DATABASE_URL_MIGRATIONS'] = ENV.fetch('ADMIN_DATABASE_URL')
+PROVISIONED_DATABASE = !ENV['ADMIN_DATABASE_URL'].to_s.strip.empty?
+
+# RACK_ENV=test is not a guard: it is set two lines up, unconditionally, by
+# this very file. So the database has to name itself as disposable — or the
+# operator has to say so explicitly, once, in the environment. The rule and
+# the name-check are in spec/support/scratch_guard.rb, pure over strings.
+require_relative 'support/scratch_guard'
+
+if PROVISIONED_DATABASE
+  # A caller who sets only ADMIN_DATABASE_URL gets the single-credential
+  # behaviour it had before; the Postgres lane sets all three.
+  ENV['ADMIN_DATABASE_URL_RO'] ||= ENV.fetch('ADMIN_DATABASE_URL')
+  ENV['ADMIN_DATABASE_URL_MIGRATIONS'] ||= ENV.fetch('ADMIN_DATABASE_URL')
+  SCRATCH_DIR = nil
+else
+  SCRATCH_DIR = File.join(Dir.tmpdir, "rodauth-admin-spec-#{Process.pid}")
+  FileUtils.mkdir_p(SCRATCH_DIR)
+  # One SQLite file plays all three roles (docs/design/database-credentials.md).
+  ENV['ADMIN_DATABASE_URL'] = "sqlite://#{SCRATCH_DIR}/authdb.sqlite3"
+  ENV['ADMIN_DATABASE_URL_RO'] = ENV.fetch('ADMIN_DATABASE_URL')
+  ENV['ADMIN_DATABASE_URL_MIGRATIONS'] = ENV.fetch('ADMIN_DATABASE_URL')
+end
+
+# Before anything connects: every URL the suite can write through, not just
+# the app one. The destructive statements run through the migrator.
+offenders = ScratchGuard.offenders(ENV, scratch_dir: SCRATCH_DIR)
+abort ScratchGuard.refusal(*offenders.first) unless offenders.empty?
 
 require 'rack/test'
 require 'rotp'
@@ -32,7 +64,22 @@ require_relative '../lib/rodauth_admin/authdb_schema'
 require_relative '../lib/rodauth_admin/allowlist'
 require_relative '../lib/rodauth_admin/audit'
 
-RodauthAdmin::AuthdbSchema.build!(RodauthAdmin::Database.migrator)
+# The string check above proves the configuration; this proves the
+# connection. Sequel resolves a URL into opts[:database], and that is what
+# the DELETEs and the DDL actually land in.
+def assert_scratch_connection!(label, db)
+  name = ScratchGuard.violation(db.opts[:database], scratch_dir: SCRATCH_DIR)
+  abort ScratchGuard.refusal("the #{label} connection", name) if name
+end
+
+migrator = RodauthAdmin::Database.migrator
+assert_scratch_connection!('migrator', migrator)
+assert_scratch_connection!('app', RodauthAdmin::Database.app)
+
+# Both steps are idempotent: build! refuses to rebuild over an existing
+# accounts table and Sequel::Migrator is a no-op when already at the latest
+# version, so a pre-provisioned database falls straight through.
+RodauthAdmin::AuthdbSchema.build!(migrator) unless migrator.table_exists?(:accounts)
 RodauthAdmin::Database.migrate_admin!
 RodauthAdmin.boot!
 
@@ -41,8 +88,23 @@ module SpecSupport
 
   module_function
 
-  def authdb = RodauthAdmin::Database.app
-  def admin_db = RodauthAdmin::Database.app
+  # Fixture setup and teardown are schema-owner work, not runtime work, so
+  # they go through the migrator whenever it is a genuinely different
+  # credential. Under the real PostgreSQL grants the app role cannot do what
+  # a fixture needs: `accounts` is SELECT-only for it, it has no access at
+  # all to account_password_hashes, and account_otp_keys has no DELETE grant
+  # (db/grants/postgres/rodauth_admin_roles.sql) — which is exactly the
+  # privilege boundary the specs exist to keep intact, so the fixtures must
+  # not be the thing that widens it. On SQLite all three URLs are the same
+  # file, the comparison is false, and this stays Database.app as before.
+  FIXTURE_DB = if RodauthAdmin::Env.database_url == RodauthAdmin::Env.database_url_migrations
+                 RodauthAdmin::Database.app
+               else
+                 RodauthAdmin::Database.migrator
+               end
+
+  def authdb = FIXTURE_DB
+  def admin_db = FIXTURE_DB
 
   # A Verified production-shaped account with an argon2id password hash in
   # the separate account_password_hashes table, exactly as the tenant app
@@ -54,9 +116,17 @@ module SpecSupport
     id
   end
 
+  # Every child of accounts first, then accounts. A hand-kept list is enough
+  # on SQLite (foreign keys are not enforced there by default), but
+  # PostgreSQL rejects the delete from accounts if any table the list forgot
+  # still references it — so ask the database instead of maintaining a list.
+  # account_statuses is reference data, never a child.
+  ACCOUNT_CHILD_TABLES = FIXTURE_DB.tables.select { |t| t.to_s.start_with?('account_') }
+                                   .reject { |t| t == :account_statuses }.freeze
+
   def wipe!
-    %i[account_otp_keys account_lockouts account_login_failures account_authentication_audit_logs
-       account_password_hashes accounts].each { |t| authdb[t].delete }
+    ACCOUNT_CHILD_TABLES.each { |t| authdb[t].delete }
+    authdb[:accounts].delete
     admin_db[:admin_operators].delete
     # admin_actions is append-only by trigger; leave it and assert on deltas.
   end
@@ -74,6 +144,6 @@ RSpec.configure do |config|
   config.before { SpecSupport.wipe! }
   config.after(:suite) do
     RodauthAdmin::Database.reset!
-    FileUtils.rm_rf(SCRATCH_DIR)
+    FileUtils.rm_rf(SCRATCH_DIR) if SCRATCH_DIR
   end
 end

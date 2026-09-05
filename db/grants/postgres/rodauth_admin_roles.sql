@@ -20,15 +20,24 @@
 -- Neither role can CREATE, ALTER, DROP or TRUNCATE anything.
 --
 -- Run as a superuser or as ots_migrator (the database owner) AFTER
--- `rake db:migrate` has created the admin tables. Replace CHANGE_ME first.
+-- `rake db:migrate` has created the admin tables. The database name and the
+-- two passwords are psql variables rather than placeholders to edit: they
+-- are values, not SQL, so passing them keeps a password containing '/', '&'
+-- or a quote from being mangled or from ending up in the file.
+--
+--   psql -d postgres -v ON_ERROR_STOP=1 \
+--        -v dbname=onetime_authdb \
+--        -v app_pw="$APP_ROLE_PASSWORD" -v ro_pw="$RO_ROLE_PASSWORD" \
+--        -f db/grants/postgres/rodauth_admin_roles.sql
+--
 -- This file is the grant list; review changes to it like code.
 
-CREATE ROLE rodauth_admin_app LOGIN PASSWORD 'CHANGE_ME_APP_ROLE_PASSWORD';
-CREATE ROLE rodauth_admin_ro  LOGIN PASSWORD 'CHANGE_ME_RO_ROLE_PASSWORD';
+CREATE ROLE rodauth_admin_app LOGIN PASSWORD :'app_pw';
+CREATE ROLE rodauth_admin_ro  LOGIN PASSWORD :'ro_pw';
 
-GRANT CONNECT ON DATABASE onetime_authdb TO rodauth_admin_app, rodauth_admin_ro;
+GRANT CONNECT ON DATABASE :"dbname" TO rodauth_admin_app, rodauth_admin_ro;
 
-\c onetime_authdb
+\c :"dbname"
 
 GRANT USAGE ON SCHEMA public TO rodauth_admin_app, rodauth_admin_ro;
 
@@ -44,8 +53,32 @@ GRANT SELECT ON accounts, account_statuses TO rodauth_admin_app;
 -- them and the role needs no direct access to the hash table. The direct
 -- SELECT below is the fallback for databases without the functions; drop it
 -- once the functions are confirmed present.
-GRANT EXECUTE ON FUNCTION rodauth_get_salt(bigint) TO rodauth_admin_app;
-GRANT EXECUTE ON FUNCTION rodauth_valid_password_hash(bigint, text) TO rodauth_admin_app;
+-- SECURITY DEFINER functions execute as their owner, so PUBLIC EXECUTE would
+-- hand every role in the database an oracle over the hash table both runtime
+-- roles are deliberately denied SELECT on. Revoke first, then grant to the
+-- one role that needs it.
+-- Guarded with to_regprocedure: on an authdb without the functions, a bare
+-- REVOKE aborts the script half-applied, which is the one outcome a
+-- privilege file must never produce. Skipping is correct there — with no
+-- functions there is no oracle to revoke and Rodauth falls back to the hash
+-- table (see the commented GRANT below).
+DO $$
+BEGIN
+  IF to_regprocedure('rodauth_get_salt(bigint)') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION rodauth_get_salt(bigint) FROM PUBLIC;
+    GRANT EXECUTE ON FUNCTION rodauth_get_salt(bigint) TO rodauth_admin_app;
+  ELSE
+    RAISE NOTICE 'rodauth_get_salt(bigint) not present; skipping its grants';
+  END IF;
+
+  IF to_regprocedure('rodauth_valid_password_hash(bigint, text)') IS NOT NULL THEN
+    REVOKE ALL ON FUNCTION rodauth_valid_password_hash(bigint, text) FROM PUBLIC;
+    GRANT EXECUTE ON FUNCTION rodauth_valid_password_hash(bigint, text) TO rodauth_admin_app;
+  ELSE
+    RAISE NOTICE 'rodauth_valid_password_hash(bigint, text) not present; skipping its grants';
+  END IF;
+END
+$$;
 -- GRANT SELECT ON account_password_hashes TO rodauth_admin_app;  -- fallback only
 
 -- lockout feature: failure counters and lockout rows
@@ -72,6 +105,26 @@ GRANT SELECT ON admin_schema_info TO rodauth_admin_app;
 -- ============================================================================
 -- rodauth_admin_ro: every admin query (CHARTER §3 capability table)
 -- ============================================================================
+--
+-- Phase 2 (aggregate visibility) reads exactly these eight, and every stat
+-- and filtered list on the board fails closed without them. Removing one is
+-- removing a screen, so they are called out separately from the rest of the
+-- capability surface:
+--
+--   accounts                     status breakdown, orphan list (external_id
+--                                IS NULL), the id every other count joins on
+--   account_statuses             status id -> name; never trust the ordinal
+--   account_otp_keys             MFA adoption
+--   account_webauthn_keys        MFA adoption (passkeys)
+--   account_lockouts             active lockouts (always with deadline > now)
+--   account_login_failures       failure counts beside the lockout list
+--   account_active_session_keys  active session keys (NOT "users online")
+--   account_recovery_codes       unused recovery codes; a row count, since
+--                                Rodauth deletes a code on use (db/README.md)
+--
+-- spec/grants_spec.rb asserts all eight are readable by this role, and that
+-- writes are refused, whenever the suite runs against PostgreSQL.
+-- The remaining tables below are Phase 3 (account detail) surface.
 
 GRANT SELECT ON
   accounts,

@@ -4,16 +4,17 @@ Standalone admin application for the Rodauth (`full`-mode) authentication
 store behind [Onetime Secret](https://github.com/onetimesecret/onetimesecret):
 the ~200k-account SQL authdb that the colonel console cannot see or touch.
 
-**Status:** Phase 1 (bootstrap) in progress. The front door works end to end
-against a local authdb; deploy target and production grants are not yet
-applied.
+**Status:** Phase 1 (bootstrap) done — the front door works end to end
+against a local authdb. Phase 2 (aggregate visibility) in progress: the
+read-only stats board and the locked / orphaned lists. Deploy target and
+production grants are not yet applied.
 
 ## Read first
 
 - [`docs/CHARTER.md`](docs/CHARTER.md) — why this is its own codebase, what it
-  owns, architecture, five-phase plan, open questions. Revision 2 resolves
-  operator identity: operators sign in with their **production** account,
-  gated by an allowlist.
+  owns, architecture, five-phase plan, open questions. Revision 3; revision 2
+  resolved operator identity: operators sign in with their **production**
+  account, gated by an allowlist.
 - [`docs/design/database-credentials.md`](docs/design/database-credentials.md)
   — one database, three credentials: runtime, read-only, and the tenant
   app's existing migrator. [`db/README.md`](db/README.md) has the
@@ -44,13 +45,15 @@ lib/rodauth_admin/
   env.rb                     every ENV read; unset RACK_ENV means production
   database.rb                app / readonly / migrator connections
   auth.rb                    the Rodauth instance (login, otp, lockout, audit_logging)
-  app.rb                     the Roda app: healthz, rodauth routes, allowlist gate, heartbeat
+  app.rb                     the Roda app: healthz, rodauth routes, allowlist gate, stats board, account lists
   allowlist.rb               admin_operators reads and audited writes
   audit.rb                   admin_actions writer
+  stats.rb                   aggregate authdb counts, briefly cached, degrades to unavailable
+  account_list.rb            the locked / orphaned account lists, filtered and paginated
   authdb_schema.rb           production authdb shape as a rodauth-tools feature list
 db/migrate/                  the admin tables (Sequel migrations, own bookkeeping table)
 db/grants/postgres/          the two runtime roles and every grant
-views/                       layout + heartbeat; Rodauth renders its own forms
+views/                       layout, stats board, account lists; Rodauth renders its own forms
 try/, spec/                  tryouts (units) and RSpec (front-door flows)
 ```
 
@@ -71,14 +74,24 @@ bundle exec rake 'operators:add[you@example.com]' REASON="bootstrap operator"
 bundle exec rackup                # http://localhost:9292
 ```
 
-Sign in, enrol TOTP when prompted, and you should see the heartbeat.
+Sign in, enrol TOTP when prompted, and you should see the stats board.
+
+`COLONEL_CONSOLE_URL` is optional: set it to the tenant app's base URL and
+each account's `external_id` renders as a deep link into the colonel console
+(nothing is ever requested from it).
 
 ```bash
-bundle exec rake test             # tryouts + rspec
+bundle exec rake test             # tryouts + rspec (SQLite)
 bundle exec rubocop
 bundle exec rake authdb:status    # which authdb tables the door needs, and whether they exist
 bundle exec rake audit:recent     # tail admin_actions
 ```
+
+CI runs the same suite twice: once on scratch SQLite, and once on a real
+PostgreSQL authdb with `db/grants/postgres/rodauth_admin_roles.sql` applied
+and three distinct roles, which is the only place the grants and the
+append-only trigger are proven rather than assumed (`spec/grants_spec.rb`,
+`db/README.md`). Locally, `rake test` is the SQLite lane.
 
 ## Configuration
 

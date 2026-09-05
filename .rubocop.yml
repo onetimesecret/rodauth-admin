@@ -28,6 +28,16 @@ Lint/UselessAssignment:
   Exclude:
     - 'try/**/*'
 
+# A tryout file is a script, not a library: its stub doubles (a db that
+# always raises, a db that sleeps) belong beside the tests that use them,
+# and the concurrency test's whole subject is a second thread.
+Style/OneClassPerFile:
+  Exclude:
+    - 'try/**/*'
+ThreadSafety/NewThread:
+  Exclude:
+    - 'try/**/*'
+
 Style/FrozenStringLiteralComment:
   Enabled: true
   EnforcedStyle: always

@@ -7,7 +7,7 @@
   <title>Rodauth Admin</title>
   <style>
     :root { color-scheme: light dark; }
-    body { font: 15px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+    body { font: 15px/1.5 system-ui, sans-serif; max-width: 64rem; margin: 2rem auto; padding: 0 1rem; }
     header { border-bottom: 2px solid #0d7263; margin-bottom: 1.5rem; padding-bottom: .5rem; display: flex; justify-content: space-between; align-items: baseline; }
     header h1 { font-size: 1.1rem; margin: 0; letter-spacing: .04em; text-transform: uppercase; }
     header nav a { margin-left: 1rem; }
@@ -20,6 +20,22 @@
     dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1rem; }
     dt { font-weight: 600; }
     code { font-family: ui-monospace, monospace; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .8rem; margin: 1rem 0; }
+    .stat { border: 1px solid rgba(128,128,128,.35); border-left: 3px solid #0d7263; padding: .6rem .8rem; }
+    .stat h3 { font-size: .78rem; margin: 0 0 .3rem; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; opacity: .8; }
+    .stat .value { font-size: 1.6rem; line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .stat.wide { grid-column: 1 / -1; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+    th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid rgba(128,128,128,.3); vertical-align: top; }
+    th { font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; opacity: .8; }
+    .stat table { margin: 0; }
+    .stat td, .stat th { padding: .15rem .4rem .15rem 0; border: 0; }
+    .degraded { border-left: 3px solid #b3261e; background: rgba(179,38,30,.08); padding: .8rem 1rem; margin: 1rem 0; }
+    .pagination { display: flex; gap: 1rem; align-items: baseline; margin: 1rem 0; }
+    .footnote { font-size: .8rem; opacity: .75; margin: .3rem 0; }
+    .filters { margin: 1rem 0; }
+    .filters a { margin-right: 1rem; }
+    .filters a.current { font-weight: 700; text-decoration: none; }
   </style>
 </head>
 <body>
@@ -27,6 +43,9 @@
     <h1>Rodauth Admin</h1>
     <nav>
       <% if rodauth.logged_in? %>
+        <a href="/">Stats</a>
+        <a href="/accounts?filter=locked">Locked</a>
+        <a href="/accounts?filter=orphaned">Orphaned</a>
         <a href="<%= rodauth.logout_path %>">Sign out</a>
       <% end %>
     </nav>
