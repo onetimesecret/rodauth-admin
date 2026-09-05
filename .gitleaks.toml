@@ -1,0 +1,19 @@
+# .gitleaks.toml
+#
+# Read by both the pre-commit gitleaks hook (staged diff) and the CI
+# `secrets` job (full history). Everything is the default rule set; the
+# allowlist below is the only local decision.
+#
+# .env.example is a template: every value is empty by construction, and
+# CI would catch a real value there like any other file. The default
+# generic-api-key rule reads `AUTH_SECRET=` followed by the next line's
+# key name as key=value across the newline, which is a false positive on
+# any two adjacent *_SECRET= keys. Allowlisting the path is narrower than
+# disabling the rule.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "the env template has no values by construction"
+paths = ['''^\.env\.example$''']
