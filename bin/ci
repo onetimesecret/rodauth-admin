@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+#
+# bin/ci — the single definition of "the checks".
+#
+# Used by the git hooks, by GitHub Actions and by `rake test`, so that all
+# three run exactly the same commands. Stages are independent; each one is a
+# single command and its exit status is the stage's result.
+#
+#   bin/ci                 lint, try, rspec (in that order, stop at first failure)
+#   bin/ci <stage>...      only the named stages, in the order given
+#
+# Stages: lint audit try rspec. `audit` needs the network (it refreshes the
+# advisory database), so it is not in the default set; CI runs it as its own
+# job. RACK_ENV=test is set for try and rspec only; nothing else in the
+# environment is touched, because the PostgreSQL lane pre-sets the database
+# URLs and RACK_ENV itself.
+#
+# One exception, and it is the same rule spec/support/spec_mode.rb applies:
+# a pre-set ADMIN_DATABASE_URL only counts as "a database was provisioned for
+# this run" when the caller also said RACK_ENV=test. Otherwise the URL is just
+# direnv's development URL leaking in from the shell, and it is unset for the
+# try and rspec stages so the suite builds its own scratch SQLite. Without
+# this, bin/ci setting RACK_ENV=test would turn every dev shell into a
+# "provisioned" run pointed at the developer's real authdb.
+
+set -euo pipefail
+
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+DEFAULT_STAGES=(lint try rspec)
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: bin/ci [stage...]
+
+  lint    bundle exec rubocop --parallel
+  audit   bundle exec bundler-audit check --update   (network; not in the default set)
+  try     bundle exec try --agent try/
+  rspec   bundle exec rspec
+
+With no arguments: lint try rspec, stopping at the first failure.
+USAGE
+  exit 2
+}
+
+# Run a command with RACK_ENV=test, dropping inherited database URLs unless
+# the caller genuinely provisioned a database (see the header).
+test_env() {
+  if [ "${RACK_ENV:-}" = "test" ]; then
+    env RACK_ENV=test "$@"
+  else
+    # -u before any assignment: BSD env rejects the other order.
+    env -u ADMIN_DATABASE_URL \
+        -u ADMIN_DATABASE_URL_RO \
+        -u ADMIN_DATABASE_URL_MIGRATIONS \
+        RACK_ENV=test "$@"
+  fi
+}
+
+run_stage() {
+  local stage="$1"
+  printf '\n==> %s\n' "$stage" >&2
+  case "$stage" in
+    lint)  bundle exec rubocop --parallel ;;
+    audit) bundle exec bundler-audit check --update ;;
+    try)   test_env bundle exec try --agent try/ ;;
+    rspec) test_env bundle exec rspec ;;
+    *)     printf 'bin/ci: unknown stage %s\n\n' "$stage" >&2; usage ;;
+  esac
+}
+
+# Branch on $# rather than assigning from "$@" first: bash 3.2 (macOS)
+# treats an empty "$@" as unbound under `set -u`.
+if [ "$#" -eq 0 ]; then
+  stages=("${DEFAULT_STAGES[@]}")
+else
+  stages=("$@")
+fi
+
+# Reject the whole invocation before running anything, so a typo in the last
+# stage does not cost a full suite first.
+for stage in "${stages[@]}"; do
+  case "$stage" in
+    lint|audit|try|rspec) ;;
+    -h|--help) usage ;;
+    *) printf 'bin/ci: unknown stage %s\n\n' "$stage" >&2; usage ;;
+  esac
+done
+
+for stage in "${stages[@]}"; do
+  if ! run_stage "$stage"; then
+    printf '\n==> FAILED at stage: %s\n' "$stage" >&2
+    exit 1
+  fi
+done
+
+printf '\n==> ok: %s\n' "${stages[*]}" >&2

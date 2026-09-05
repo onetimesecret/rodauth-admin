@@ -75,6 +75,7 @@ gem 'logger'
 # ====================================
 
 group :development do
+  gem 'bundler-audit', require: false
   gem 'debug', require: false
   gem 'rackup'
   gem 'rerun', '~> 0.14'
@@ -88,6 +89,7 @@ end
 group :test do
   gem 'rack-test', require: false
   gem 'rspec', '4.0.0.beta1'
+  gem 'simplecov', require: false
   gem 'timecop', '~> 0.9'
   gem 'tryouts', '~> 4.0.0.pre1', require: false
 

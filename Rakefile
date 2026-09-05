@@ -123,10 +123,11 @@ namespace :audit do
   end
 end
 
-desc 'Run tryouts and RSpec'
+# One definition of "the tests", shared with the git hooks and GitHub
+# Actions. Stage list and behaviour live in bin/ci.
+desc 'Run the checks: bin/ci (lint, tryouts, RSpec)'
 task :test do
-  sh 'bundle exec try --agent try/'
-  sh 'bundle exec rspec'
+  sh 'bin/ci'
 end
 
 task default: :test

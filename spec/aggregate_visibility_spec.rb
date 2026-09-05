@@ -14,8 +14,6 @@ require_relative 'support/front_door_helpers'
 RSpec.describe RodauthAdmin::App do
   include FrontDoorHelpers
 
-  def app = RodauthAdmin::App
-
   let(:email) { 'operator@example.com' }
   let(:password) { 'correct horse battery staple' }
   let!(:account_id) { create_account(email: email, password: password, external_id: 'extid-op-1') }

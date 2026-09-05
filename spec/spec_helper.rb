@@ -7,27 +7,53 @@
 # the migrated admin tables. ENV must be set before lib/rodauth_admin loads,
 # because RodauthAdmin::Auth's table_guard connects at class-definition time.
 #
-# Two modes:
+# Two modes, chosen by SpecMode.provisioned_database? from the environment as
+# inherited — before this file sets RACK_ENV:
 #
 #   default (local, and the `test` CI job) — a scratch SQLite file plays all
-#     three credentials, and this file builds and migrates it.
-#   pre-provisioned (the `test-postgres` CI job) — ADMIN_DATABASE_URL is
-#     already set in ENV, pointing at a real PostgreSQL authdb that CI built,
-#     migrated and granted with three genuinely different roles. Nothing is
-#     built here; the schema steps below are skipped when the schema exists,
-#     which is also what makes a re-run against the same database work.
+#     three credentials, and this file builds and migrates it. Any
+#     ADMIN_DATABASE_URL* inherited from the shell is IGNORED and overwritten.
+#   pre-provisioned (the `test-postgres` CI job) — the caller set RACK_ENV=test
+#     *and* ADMIN_DATABASE_URL, pointing at a real PostgreSQL authdb that CI
+#     built, migrated and granted with three genuinely different roles.
+#     Nothing is built here; the schema steps below are skipped when the
+#     schema exists, which is also what makes a re-run work.
+#
+# The RACK_ENV=test condition is what keeps a developer shell out of the
+# provisioned path: direnv exports the real local ADMIN_DATABASE_URL with
+# RACK_ENV=development, and treating that as "provisioned" made `rake test`
+# die in the scratch guard. Saying `RACK_ENV=test ADMIN_DATABASE_URL=... rspec`
+# is the deliberate act that opts in — and the scratch guard still has to pass.
 
 require 'fileutils'
 require 'securerandom'
 require 'tmpdir'
 require 'uri'
 
+require 'simplecov'
+SimpleCov.start do
+  enable_coverage :line
+  cover 'lib/**/*.rb'
+  skip '/spec/'
+  skip '/try/'
+end
+SimpleCov.at_exit do
+  result = SimpleCov.result
+  result.format!
+  covered = result.covered_lines
+  total = covered + result.missed_lines
+  # One grep-able line for the CI job summary; no minimum threshold.
+  $stdout.puts format('Coverage: %<pct>.1f%% (%<covered>d/%<total>d lines)',
+                      pct: result.covered_percent, covered: covered, total: total)
+end
+
+require_relative 'support/spec_mode'
+PROVISIONED_DATABASE = SpecMode.provisioned_database?(ENV)
+
 ENV['RACK_ENV'] = 'test'
 ENV['AUTH_SECRET'] = "test-hmac-secret-#{'x' * 48}"
 ENV['RODAUTH_ADMIN_SESSION_SECRET'] = SecureRandom.hex(64)
 ENV.delete('ARGON2_SECRET')
-
-PROVISIONED_DATABASE = !ENV['ADMIN_DATABASE_URL'].to_s.strip.empty?
 
 # RACK_ENV=test is not a guard: it is set two lines up, unconditionally, by
 # this very file. So the database has to name itself as disposable — or the
@@ -55,6 +81,7 @@ end
 offenders = ScratchGuard.offenders(ENV, scratch_dir: SCRATCH_DIR)
 abort ScratchGuard.refusal(*offenders.first) unless offenders.empty?
 
+require 'rack/lint'
 require 'rack/test'
 require 'rotp'
 require 'argon2'
@@ -102,6 +129,14 @@ module SpecSupport
                else
                  RodauthAdmin::Database.migrator
                end
+
+  # Every spec drives the app through Rack::Lint, so a Rack 3 protocol
+  # violation (a frozen-string body, a bad header name, a non-Integer status)
+  # fails a spec here rather than surprising a real server. Lint is test-only
+  # on purpose: config.ru runs the app bare.
+  LINTED_APP = Rack::Lint.new(RodauthAdmin::App)
+
+  def app = LINTED_APP
 
   def authdb = FIXTURE_DB
   def admin_db = FIXTURE_DB
