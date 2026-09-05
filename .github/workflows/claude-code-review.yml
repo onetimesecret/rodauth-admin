@@ -1,0 +1,122 @@
+# .github/workflows/claude-code-review.yml
+
+name: Claude Code Review
+
+on:
+  pull_request:
+    branches:
+      - 'feature/*'
+      - 'fix/*'
+      - 'wip/*'
+      - 'rel/*'
+      - 'develop'
+      - 'main'
+    types: [opened, synchronize, labeled]
+
+jobs:
+  claude-review:
+    # Optional: Filter by PR author
+    # if: |
+    #   github.event.pull_request.user.login == 'external-contributor' ||
+    #   github.event.pull_request.user.login == 'new-developer' ||
+    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    # if: ${{ !startsWith(github.head_ref, 'deps/') }}
+    runs-on: ubuntu-latest
+    # Run only when ALL of the following are true:
+    #   1. Author is not a bot (renovate, dependabot, etc. surface as 'name[bot]' in github.actor).
+    #   2. PR head is not from a fork. Fork PRs run without access to repository
+    #      secrets, so CLAUDE_CODE_OAUTH_TOKEN is empty and the action would fail.
+    #      External contributions should be reviewed manually or via a maintainer-triggered
+    #      workflow that runs against the merged ref.
+    #   3. The event is one of:
+    #        - a freshly opened PR (always reviewed on open),
+    #        - a 'claude-review' label being added (manual trigger), or
+    #        - a push to a PR that already carries the 'claude-review' label
+    #          (so subsequent commits keep getting reviewed without re-labeling).
+    if: ${{
+      !endsWith(github.actor, '[bot]') &&
+      !github.event.pull_request.head.repo.fork &&
+      (
+        (github.event.action == 'opened') ||
+        (github.event.action == 'labeled' && github.event.label.name == 'claude-review') ||
+        (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'claude-review'))
+      )
+      }}
+
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+
+      # Note: This workflow has been observed to fail with "null is not an object
+      # (evaluating 'c.body')". Deleting PR comments before/during execution may
+      # be related. Re-run after comment activity settles.
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@28f83620103c48a57093dcc2837eec89e036bb9f # beta (v0.0.63)
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          # Model selection. The action's own default (claude-sonnet-4-20250514)
+          # is retired and 404s before the run starts, so this must always
+          # resolve to something live. Set the ANTHROPIC_MODEL repo variable to
+          # change models without a PR; the literal is the floor, so an unset or
+          # cleared variable stays harmless (an empty value would hand the action
+          # back its own retired default). Spelled out rather than passed as the
+          # 'opus' alias: this ref bundles Claude Code 1.0.88, which resolves
+          # aliases against its own build-time table, itself naming retired ids.
+          model: "${{ vars.ANTHROPIC_MODEL || 'claude-opus-5' }}"
+          fallback_model: "${{ vars.CLAUDE_FALLBACK_MODEL || 'claude-haiku-4-5-20251001' }}"
+
+          # Direct prompt for automated review (no @claude mention needed)
+          direct_prompt: |
+            Review this PR for defects. Report only findings you can state
+            as a concrete failure scenario (specific input or state leading
+            to wrong output, data loss, or a security consequence), with
+            file and line.
+
+            Do not comment on: style or formatting (rubocop gates these
+            in CI), missing stdlib requires, typos, test file organization,
+            or pre-existing code outside this PR's changes.
+
+            Do not summarize the PR, restate the diff, or praise the code.
+            If nothing meets the bar, say exactly that in one sentence.
+
+            Read AGENTS.md (if present) for repo invariants that must not
+            be reported as defects. Those exemptions cover the current mechanisms only:
+            if this PR modifies the mechanism enforcing an invariant, the
+            invariant is in scope and must be reviewed.
+
+            Structural or architectural observations without a failure
+            scenario may be raised as explicitly non-blocking follow-up
+            suggestions, at most two per review, clearly marked as such.
+
+          # Optional: Use sticky comments to make Claude reuse the same comment on subsequent pushes to the same PR
+          use_sticky_comment: true
+
+          # Optional: Add specific tools for running tests or linting
+          # allowed_tools: "Bash(pnpm run test),Bash(pnpm run lint)"
+
+      - name: Remove claude-review label
+        # Remove label whether success or failure - prevents getting stuck
+        if: always() && github.event.action != 'opened'
+        uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
+        with:
+          script: |
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name: 'claude-review'
+              });
+            } catch (error) {
+              console.log('Label not found or already removed');
+            }
