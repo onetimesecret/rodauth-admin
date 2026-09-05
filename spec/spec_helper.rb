@@ -29,46 +29,18 @@ ENV.delete('ARGON2_SECRET')
 
 PROVISIONED_DATABASE = !ENV['ADMIN_DATABASE_URL'].to_s.strip.empty?
 
-# The suite's `before` hook DELETEs every account table through the migrator
-# credential, which in the provisioned mode is the schema owner. RACK_ENV=test
-# is not a guard: it is set two lines up, unconditionally, by this very file.
-# So the database has to name itself as disposable — or the operator has to
-# say so explicitly, once, in the environment.
-SCRATCH_DATABASE_NAME = /(^|_)(test|ci|scratch)($|_)/
-DESTRUCTIVE_OVERRIDE = 'RODAUTH_ADMIN_ALLOW_DESTRUCTIVE_SPECS'
-
-def scratch_database!(url)
-  return if ENV[DESTRUCTIVE_OVERRIDE] == '1'
-
-  # An unparseable URL (a password with unescaped punctuation, say) is not a
-  # licence to proceed: no name means no proof, so the refusal stands.
-  name = begin
-    URI.parse(url).path.to_s.split('/').last.to_s
-  rescue URI::InvalidURIError
-    ''
-  end
-  return if name.match?(SCRATCH_DATABASE_NAME)
-
-  abort <<~REFUSAL
-    Refusing to run the specs against ADMIN_DATABASE_URL database #{name.inspect}.
-
-    This suite truncates every account table (accounts and every account_*
-    child) plus admin_operators before each example, through the migrator
-    credential. It is only ever safe against a scratch database.
-
-    Name the database so it says so (matching #{SCRATCH_DATABASE_NAME.source},
-    e.g. onetime_authdb_ci), or set #{DESTRUCTIVE_OVERRIDE}=1 if you have
-    genuinely decided this database is disposable.
-  REFUSAL
-end
+# RACK_ENV=test is not a guard: it is set two lines up, unconditionally, by
+# this very file. So the database has to name itself as disposable — or the
+# operator has to say so explicitly, once, in the environment. The rule and
+# the name-check are in spec/support/scratch_guard.rb, pure over strings.
+require_relative 'support/scratch_guard'
 
 if PROVISIONED_DATABASE
-  scratch_database!(ENV.fetch('ADMIN_DATABASE_URL'))
-  SCRATCH_DIR = nil
   # A caller who sets only ADMIN_DATABASE_URL gets the single-credential
   # behaviour it had before; the Postgres lane sets all three.
   ENV['ADMIN_DATABASE_URL_RO'] ||= ENV.fetch('ADMIN_DATABASE_URL')
   ENV['ADMIN_DATABASE_URL_MIGRATIONS'] ||= ENV.fetch('ADMIN_DATABASE_URL')
+  SCRATCH_DIR = nil
 else
   SCRATCH_DIR = File.join(Dir.tmpdir, "rodauth-admin-spec-#{Process.pid}")
   FileUtils.mkdir_p(SCRATCH_DIR)
@@ -77,6 +49,11 @@ else
   ENV['ADMIN_DATABASE_URL_RO'] = ENV.fetch('ADMIN_DATABASE_URL')
   ENV['ADMIN_DATABASE_URL_MIGRATIONS'] = ENV.fetch('ADMIN_DATABASE_URL')
 end
+
+# Before anything connects: every URL the suite can write through, not just
+# the app one. The destructive statements run through the migrator.
+offenders = ScratchGuard.offenders(ENV, scratch_dir: SCRATCH_DIR)
+abort ScratchGuard.refusal(*offenders.first) unless offenders.empty?
 
 require 'rack/test'
 require 'rotp'
@@ -87,10 +64,21 @@ require_relative '../lib/rodauth_admin/authdb_schema'
 require_relative '../lib/rodauth_admin/allowlist'
 require_relative '../lib/rodauth_admin/audit'
 
+# The string check above proves the configuration; this proves the
+# connection. Sequel resolves a URL into opts[:database], and that is what
+# the DELETEs and the DDL actually land in.
+def assert_scratch_connection!(label, db)
+  name = ScratchGuard.violation(db.opts[:database], scratch_dir: SCRATCH_DIR)
+  abort ScratchGuard.refusal("the #{label} connection", name) if name
+end
+
+migrator = RodauthAdmin::Database.migrator
+assert_scratch_connection!('migrator', migrator)
+assert_scratch_connection!('app', RodauthAdmin::Database.app)
+
 # Both steps are idempotent: build! refuses to rebuild over an existing
 # accounts table and Sequel::Migrator is a no-op when already at the latest
 # version, so a pre-provisioned database falls straight through.
-migrator = RodauthAdmin::Database.migrator
 RodauthAdmin::AuthdbSchema.build!(migrator) unless migrator.table_exists?(:accounts)
 RodauthAdmin::Database.migrate_admin!
 RodauthAdmin.boot!

@@ -11,7 +11,9 @@ require_relative '../lib/rodauth_admin'
 require_relative '../lib/rodauth_admin/authdb_schema'
 require_relative '../lib/rodauth_admin/account_list'
 
-@db = Sequel.sqlite
+# Configured the way Database.connect configures a real connection, so
+# the UTC/date handling under test is the production one.
+@db = RodauthAdmin::Database.configure!(Sequel.sqlite)
 RodauthAdmin::AuthdbSchema.build!(@db)
 @now = Time.now
 
@@ -138,3 +140,13 @@ rescue RodauthAdmin::AccountList::InvalidFilter
   :refused
 end
 #=> :refused
+
+## The default `now:` is the DATABASE clock: a deadline the database wrote
+## five minutes out is listed, one it wrote five minutes ago is not
+@db[:account_lockouts].where(id: @ids[2])
+                      .update(deadline: Sequel.date_add(Sequel::CURRENT_TIMESTAMP, minutes: 5))
+listed = RodauthAdmin::AccountList.call(filter: :locked, db: @db).total
+@db[:account_lockouts].where(id: @ids[2])
+                      .update(deadline: Sequel.date_add(Sequel::CURRENT_TIMESTAMP, minutes: -5))
+[listed, RodauthAdmin::AccountList.call(filter: :locked, db: @db).total]
+#=> [3, 2]

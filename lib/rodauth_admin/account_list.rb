@@ -62,15 +62,21 @@ module RodauthAdmin
     end
 
     class << self
+      # `now:` defaults to the DATABASE's own clock, Sequel::CURRENT_TIMESTAMP
+      # (see Stats::DB_CLOCK): account_lockouts.deadline is written by the
+      # database, so comparing it against a Ruby Time would import the app
+      # host's TZ and clock drift into the answer. An explicit `now:` Time is
+      # still honoured — that is how the tests pin expiry.
+      #
       # @param filter [Symbol, String] one of FILTERS
       # @raise [InvalidFilter] for anything else
       # @return [Result] never raises for database reasons
-      def call(filter:, page: 1, per_page: PER_PAGE_DEFAULT, db: Database.readonly, now: Time.now)
+      def call(filter:, page: 1, per_page: PER_PAGE_DEFAULT, db: Database.readonly, now: nil)
         filter   = normalize_filter(filter)
         per_page = clamp(per_page, PER_PAGE_DEFAULT, 1, PER_PAGE_MAX)
         page     = [coerce(page, 1), 1].max
 
-        outcome = query(filter, page, per_page, db, now)
+        outcome = query(filter, page, per_page, db, now || Sequel::CURRENT_TIMESTAMP)
         return unavailable(outcome) if outcome.is_a?(QueryFailure)
 
         # Row building is deliberately outside the query rescue: a bug in

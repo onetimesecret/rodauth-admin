@@ -12,7 +12,9 @@ require_relative '../lib/rodauth_admin'
 require_relative '../lib/rodauth_admin/authdb_schema'
 require_relative '../lib/rodauth_admin/stats'
 
-@db = Sequel.sqlite
+# Configured the way Database.connect configures a real connection, so
+# the UTC/date handling under test is the production one.
+@db = RodauthAdmin::Database.configure!(Sequel.sqlite)
 RodauthAdmin::AuthdbSchema.build!(@db)
 @now = Time.now
 
@@ -146,3 +148,21 @@ elapsed = Time.now - started
 slow.join
 [source, hit.equal?(warm), elapsed < 0.2]
 #=> [RodauthAdmin::Stats::NullSource, true, true]
+
+## The default `now:` is the DATABASE clock, so a deadline the database
+## itself wrote five minutes out counts as an active lockout even when the
+## app process's local clock disagrees with the database's
+@db[:account_lockouts].insert(id: @a4, key: 'lk4',
+                              deadline: Sequel.date_add(Sequel::CURRENT_TIMESTAMP, minutes: 5))
+RodauthAdmin::Stats.call(db: @db).active_lockouts
+#=> 2
+
+## ... and one the database wrote five minutes ago does not
+@db[:account_lockouts].where(id: @a4)
+                      .update(deadline: Sequel.date_add(Sequel::CURRENT_TIMESTAMP, minutes: -5))
+RodauthAdmin::Stats.call(db: @db).active_lockouts
+#=> 1
+
+## computed_at is a Ruby Time even when the SQL clock is the database's
+RodauthAdmin::Stats.call(db: @db).computed_at.is_a?(Time)
+#=> true

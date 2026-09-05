@@ -47,6 +47,16 @@ module RodauthAdmin
       :orphaned_accounts, :customer_count, :customer_count_delta
     )
 
+    # The default clock for `deadline > now` is the DATABASE's own clock, not
+    # the app process's: account_lockouts.deadline is written by the database
+    # (Rodauth's CURRENT_TIMESTAMP + interval), so comparing it to anything
+    # else imports the app host's TZ and its clock drift into the answer.
+    # Sequel emits this as the literal CURRENT_TIMESTAMP on both adapters, so
+    # the comparison happens entirely inside the database. An explicit `now:`
+    # Time is still honoured — that is how the tryouts and specs pin
+    # "expired" and "not yet expired" deterministically.
+    DB_CLOCK = Sequel::CURRENT_TIMESTAMP
+
     CACHE_MUTEX = Mutex.new
     # A separate lock for the pluggable source: #cached computes with
     # CACHE_MUTEX released and the computation reads the source, so sharing
@@ -65,7 +75,7 @@ module RodauthAdmin
       end
 
       # @return [Result] never raises
-      def call(db: Database.readonly, now: Time.now)
+      def call(db: Database.readonly, now: DB_CLOCK)
         compute(db, now)
       # Exactly the outage errors (Database::UNAVAILABLE_ERRORS), never a
       # bare StandardError: the board must not 500 when the authdb blinks,
@@ -85,12 +95,13 @@ module RodauthAdmin
       # into a stalled application. Two threads that miss together may both
       # compute, which is a duplicated read-only query — much cheaper than
       # the stall it replaces.
-      def cached(ttl: 60, db: Database.readonly, now: Time.now)
+      def cached(ttl: 60, db: Database.readonly, now: DB_CLOCK)
+        at  = wall_clock(now)
         hit = CACHE_MUTEX.synchronize { read_cache }
-        return hit[:result] if fresh?(hit, ttl, now)
+        return hit[:result] if fresh?(hit, ttl, at)
 
         result = call(db: db, now: now)
-        CACHE_MUTEX.synchronize { store_cache(result, now) } if result.available
+        CACHE_MUTEX.synchronize { store_cache(result, at) } if result.available
         result
       end
 
@@ -119,9 +130,14 @@ module RodauthAdmin
       end
       # rubocop:enable ThreadSafety/ClassInstanceVariable
 
+      # `now` is the SQL comparison clock, which by default is a Sequel
+      # expression rather than a Time; computed_at is a rendered wall-clock
+      # timestamp, so it is always a Ruby Time.
+      def wall_clock(now) = now.is_a?(Time) ? now : Time.now
+
       def compute(db, now)
         Result.new(
-          available: true, reason: nil, computed_at: now,
+          available: true, reason: nil, computed_at: wall_clock(now),
           status_breakdown: status_breakdown(db),
           **account_counts(db), **feature_counts(db, now)
         ).freeze
@@ -172,7 +188,7 @@ module RodauthAdmin
 
       def unavailable(reason, now)
         Result.new(
-          available: false, reason: reason, computed_at: now,
+          available: false, reason: reason, computed_at: wall_clock(now),
           total_accounts: nil, status_breakdown: nil,
           mfa_otp_accounts: nil, mfa_webauthn_accounts: nil,
           active_lockouts: nil, active_session_keys: nil, recovery_code_rows: nil,

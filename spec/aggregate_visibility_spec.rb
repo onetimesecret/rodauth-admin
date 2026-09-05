@@ -42,6 +42,19 @@ RSpec.describe RodauthAdmin::App do
     get '/'
   end
 
+  # A deadline expressed in the database's own clock, the way Rodauth
+  # writes one (CURRENT_TIMESTAMP + interval), so no Ruby Time is involved
+  # on either side of the comparison.
+  def dbnow_plus(minutes)
+    Sequel.date_add(Sequel::CURRENT_TIMESTAMP, minutes: minutes)
+  end
+
+  def db_lock!(deadline)
+    id = create_account(email: 'dbclock@example.com', password: password, external_id: 'extid-dbclock')
+    lock!(id, deadline)
+    id
+  end
+
   def lock!(id, deadline)
     authdb[:account_lockouts].insert(id: id, key: "lockkey-#{id}", deadline: deadline)
   end
@@ -98,6 +111,23 @@ RSpec.describe RodauthAdmin::App do
       # The seeded key plus the operator's own enrollment.
       expect(stats.mfa_otp_accounts).to eq(2)
       expect(last_response.body).to include('Verified')
+    end
+
+    # The clock the comparison runs on, against the real adapter of the lane.
+    # The deadline is written by the DATABASE (as Rodauth writes it: an
+    # interval off CURRENT_TIMESTAMP), never by this process, so a stats
+    # board that agrees with it is agreeing with the database's clock rather
+    # than the app host's TZ.
+    it 'counts a lockout the database itself dated in the future, with the default clock' do
+      db_lock!(dbnow_plus(5))
+      expect(RodauthAdmin::Stats.call.active_lockouts).to eq(2)
+      expect(RodauthAdmin::AccountList.call(filter: :locked).total).to eq(2)
+    end
+
+    it 'excludes a lockout the database itself dated in the past, with the default clock' do
+      db_lock!(dbnow_plus(-5))
+      expect(RodauthAdmin::Stats.call.active_lockouts).to eq(1)
+      expect(RodauthAdmin::AccountList.call(filter: :locked).total).to eq(1)
     end
 
     it 'links the lockout and orphan counts to their lists' do

@@ -122,10 +122,18 @@ module RodauthAdmin
       "#{count} (#{((count.to_f / total) * 100).round(1)}%)"
     end
 
+    # Every timestamp reaching a view is UTC by construction: database.rb
+    # sets Sequel.database_timezone/application_timezone to :utc, so a
+    # fetched `timestamp without time zone` is parsed as UTC rather than
+    # relabelled from the app host's local wall clock. getutc is kept as the
+    # explicit assertion of that — a Time from anywhere else (Time.now for
+    # computed_at) is converted rather than mislabelled "UTC".
     def utc_time(time)
       return '—' if time.nil?
+      return time.getutc.strftime('%Y-%m-%d %H:%M:%S UTC') if time.respond_to?(:getutc)
 
-      time.getutc.strftime('%Y-%m-%d %H:%M:%S UTC')
+      # SQLite can hand back a bare string for a column it has no type for.
+      "#{time} UTC"
     end
 
     # Preserves filter and per_page across pagination; page is the only

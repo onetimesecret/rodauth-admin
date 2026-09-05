@@ -94,11 +94,20 @@ On SQLite there are no roles and the grant file is inert, so
 `spec/grants_spec.rb` skips cleanly and the default lane stays fast.
 
 The CI database is named `onetime_authdb_ci`, not `onetime_authdb`, because
-`spec/spec_helper.rb` refuses to run at all when a pre-set
-`ADMIN_DATABASE_URL` names a database that does not look disposable — the
-suite truncates every account table before each example, so the name must
+`spec/spec_helper.rb` refuses to run at all against a database that does not
+look disposable — the suite truncates every account table before each
+example, and does it through the *migrator* credential, so the name must
 match `(^|_)(test|ci|scratch)($|_)` (or `RODAUTH_ADMIN_ALLOW_DESTRUCTIVE_SPECS=1`
 must be set deliberately).
+
+The check (`spec/support/scratch_guard.rb`, unit-tested by
+`try/scratch_guard_try.rb`) covers **all three** URLs — `ADMIN_DATABASE_URL`,
+`ADMIN_DATABASE_URL_RO` and `ADMIN_DATABASE_URL_MIGRATIONS` — before anything
+connects, and re-checks the resolved `opts[:database]` of the connections
+afterwards. Copying the migrator URL from the tenant app's existing
+environment (as the section above suggests) while pointing the app URL at a
+`_ci` database is therefore refused, not silently obeyed: the destructive
+statements run through the migrator.
 
 ## Known drift between the inherited spec and production
 
