@@ -59,10 +59,19 @@ psql -U postgres -v ON_ERROR_STOP=1 \
 
 ## CI
 
+`.github/workflows/ci.yml` runs the suite in two lanes, both through
+`bin/ci` (the single entry point — see
+[`docs/design/quality-gates.md`](../docs/design/quality-gates.md)):
+
+- **`test`** — scratch SQLite built by `spec/spec_helper.rb`, one file playing
+  all three credentials. Fast, and what `rake test` runs locally.
+- **`test-postgres`** — a real PostgreSQL authdb with the three roles and the
+  grant file applied.
+
 `docs/design/database-credentials.md` says the specs prove behaviour, the
 grant file proves privilege, and a Postgres CI lane is the place to prove
-both together. That lane is `test-postgres` in
-`.github/workflows/ci.yml`. Against a `postgres:16` service container it:
+both together. That is `test-postgres`. Against a `postgres:16` service
+container it:
 
 1. creates `onetime_authdb_ci` as the superuser (standing in for
    `ots_migrator` — the only credential in the job that runs DDL);
@@ -73,9 +82,19 @@ both together. That lane is `test-postgres` in
    the database name and the two passwords as psql variables exactly as the
    command above does — the file is reviewed like code, so it is executed
    like code, and no text substitution touches it;
-5. runs the whole suite with `ADMIN_DATABASE_URL` as `rodauth_admin_app`,
-   `ADMIN_DATABASE_URL_RO` as `rodauth_admin_ro`, and
-   `ADMIN_DATABASE_URL_MIGRATIONS` as the superuser.
+5. runs the whole suite (`bin/ci try`, then `bin/ci rspec`) with
+   `ADMIN_DATABASE_URL` as `rodauth_admin_app`, `ADMIN_DATABASE_URL_RO` as
+   `rodauth_admin_ro`, and `ADMIN_DATABASE_URL_MIGRATIONS` as the superuser.
+
+The lane also sets `RACK_ENV: test`, and that is not decoration. Both
+`bin/ci` and `spec/support/spec_mode.rb` treat an inherited
+`ADMIN_DATABASE_URL` as "a database was provisioned for this run" **only**
+when the caller set `RACK_ENV=test` before they started; otherwise the URLs
+are assumed to be direnv's development values leaking in from the shell and
+are dropped, and the suite builds its own scratch SQLite. Had the lane set
+only the three URLs, they would have been stripped and it would have quietly
+tested SQLite while claiming to prove the grants. The same rule is what makes
+`bin/ci` safe to run from a dev shell.
 
 What that proves, and nothing else does:
 

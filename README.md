@@ -4,10 +4,12 @@ Standalone admin application for the Rodauth (`full`-mode) authentication
 store behind [Onetime Secret](https://github.com/onetimesecret/onetimesecret):
 the ~200k-account SQL authdb that the colonel console cannot see or touch.
 
-**Status:** Phase 1 (bootstrap) done — the front door works end to end
-against a local authdb. Phase 2 (aggregate visibility) in progress: the
-read-only stats board and the locked / orphaned lists. Deploy target and
-production grants are not yet applied.
+**Status:** Phase 1 (bootstrap) and Phase 2 (aggregate visibility) done —
+the front door works end to end against a local authdb, and the read-only
+stats board and locked / orphaned lists are in. A quality phase on top adds
+the checks: `bin/ci`, git hooks, five CI jobs and a branch rule
+([`docs/design/quality-gates.md`](docs/design/quality-gates.md)). Deploy
+target and production grants are not yet applied.
 
 ## Read first
 
@@ -19,6 +21,9 @@ production grants are not yet applied.
   — one database, three credentials: runtime, read-only, and the tenant
   app's existing migrator. [`db/README.md`](db/README.md) has the
   operational side.
+- [`docs/design/quality-gates.md`](docs/design/quality-gates.md) — what runs
+  where: editor, pre-commit, pre-push, CI, branch rule; and what is
+  deliberately not gated.
 - [`docs/specs/inherited/`](docs/specs/inherited/) — verbatim copies of the
   main-repo specs this grew out of, read through the charter's §5 ledger.
 
@@ -40,6 +45,9 @@ production grants are not yet applied.
 
 ```
 config.ru                    rack entry point
+bin/setup                    bundle install + install the git hooks
+bin/ci                       the single definition of "the checks" (lint, try, rspec, audit)
+.pre-commit-config.yaml      pre-commit hooks; pre-push runs bin/ci
 lib/rodauth_admin.rb         boot: env validation, admin schema check, app load
 lib/rodauth_admin/
   env.rb                     every ENV read; unset RACK_ENV means production
@@ -55,13 +63,14 @@ db/migrate/                  the admin tables (Sequel migrations, own bookkeepin
 db/grants/postgres/          the two runtime roles and every grant
 views/                       layout, stats board, account lists; Rodauth renders its own forms
 try/, spec/                  tryouts (units) and RSpec (front-door flows)
+docs/design/                 database-credentials.md, quality-gates.md
 ```
 
 ## Local development
 
 ```bash
+bin/setup                       # bundle install + install the git hooks
 cp .env.example .env            # then edit; RACK_ENV=development
-bundle install
 bundle exec rake authdb:dev     # local authdb from rodauth-tools templates (SQLite)
 bundle exec rake db:migrate     # admin_operators + admin_actions into the same file
 ```
@@ -81,17 +90,33 @@ each account's `external_id` renders as a deep link into the colonel console
 (nothing is ever requested from it).
 
 ```bash
-bundle exec rake test             # tryouts + rspec (SQLite)
-bundle exec rubocop
 bundle exec rake authdb:status    # which authdb tables the door needs, and whether they exist
 bundle exec rake audit:recent     # tail admin_actions
 ```
 
-CI runs the same suite twice: once on scratch SQLite, and once on a real
-PostgreSQL authdb with `db/grants/postgres/rodauth_admin_roles.sql` applied
-and three distinct roles, which is the only place the grants and the
-append-only trigger are proven rather than assumed (`spec/grants_spec.rb`,
-`db/README.md`). Locally, `rake test` is the SQLite lane.
+### Checks
+
+```bash
+bin/ci                            # lint, tryouts, rspec — stops at the first failure
+bin/ci lint                       # one stage; also: try, rspec, audit
+pre-commit run --all-files        # the commit-stage hooks over the whole tree
+```
+
+`bin/ci` is the single entry point. `rake test`, the pre-push hook and every
+CI job call it, so there is no second command line to keep in sync — see
+[`docs/design/quality-gates.md`](docs/design/quality-gates.md) for the layered
+model, the RACK_ENV rule and how to add a check.
+
+The direnv shell is safe: it stays `RACK_ENV=development` with
+`ADMIN_DATABASE_URL` pointing at your real local authdb, and both `bin/ci` and
+the specs ignore inherited URLs unless the caller set `RACK_ENV=test` first.
+They build a scratch SQLite instead.
+
+CI runs the same suite twice: once on scratch SQLite (`test`), and once on a
+real PostgreSQL authdb with `db/grants/postgres/rodauth_admin_roles.sql`
+applied and three distinct roles (`test-postgres`), which is the only place
+the grants and the append-only trigger are proven rather than assumed
+(`spec/grants_spec.rb`, `db/README.md`).
 
 ## Configuration
 
