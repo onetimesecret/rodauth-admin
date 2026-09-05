@@ -17,7 +17,7 @@ module RodauthAdmin
 
     # Session-lifecycle actions are recorded without an operator-supplied
     # reason. Everything else must say why.
-    SESSION_ACTIONS = %w[login login_denied logout two_factor_auth].freeze
+    SESSION_ACTIONS = %w[login login_denied logout two_factor_auth otp_setup session_revoked].freeze
     SESSION_REASON = 'session'
 
     class BlankReason < ArgumentError; end

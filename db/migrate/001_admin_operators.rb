@@ -10,9 +10,11 @@ Sequel.migration do
     create_table(:admin_operators) do
       primary_key :id
       Bignum :account_id, null: false, unique: true
-      String :email, null: false            # display copy; the authdb is authoritative
-      String :added_by, null: false         # operator email or 'cli:<user>'
-      String :note
+      # text: true makes the type explicit. Sequel already emits text for a
+      # bare String on PostgreSQL; SQLite gets varchar(255), unenforced.
+      String :email, null: false, text: true    # display copy; the authdb is authoritative
+      String :added_by, null: false, text: true # operator email or 'cli:<user>'
+      String :note, text: true
       DateTime :created_at, null: false, default: Sequel::CURRENT_TIMESTAMP
     end
   end

@@ -42,6 +42,8 @@ Two tables in the same database, prefixed `admin_`, migrated from
 - `admin_actions` — append-only audit trail with a required `reason`.
   Append-only is enforced by triggers (SQLite and PostgreSQL) and, on
   PostgreSQL, by the runtime role having INSERT and SELECT only.
+  The PostgreSQL trigger uses `EXECUTE FUNCTION`, so the migration needs
+  PostgreSQL 11 or newer.
 
 ```bash
 ADMIN_DATABASE_URL_MIGRATIONS=postgresql://ots_migrator:...@authdb/onetime_authdb \

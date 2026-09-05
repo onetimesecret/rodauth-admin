@@ -19,7 +19,11 @@ module RodauthAdmin
   #   login / logout   password against account_password_hashes (argon2 +
   #                    ARGON2_SECRET pepper, bcrypt for legacy hashes)
   #   otp              TOTP second factor; required for every operator
-  #                    (RodauthAdmin::App calls require_two_factor_setup)
+  #                    (RodauthAdmin::App calls require_two_factor_setup).
+  #                    Enrolment (otp-setup) writes the production key table
+  #                    and is recorded in admin_actions; otp-disable,
+  #                    multifactor-disable and multifactor-manage are routed
+  #                    off (operators disable MFA in the tenant app)
   #   lockout          same counters as the tenant app; lockout couples both
   #                    ways, by design
   #   audit_logging    writes production's auth-event log, tagged so the two
@@ -81,6 +85,16 @@ module RodauthAdmin
       # No "remember this device" and no partial-auth grace: every session
       # starts with password + code.
       two_factor_auth_return_to_requested_location? true
+      # enable :otp routes otp-auth, otp-setup AND otp-disable. The last one
+      # would strip TOTP from the shared production identity through the
+      # admin door (and the runtime role is denied DELETE on
+      # account_otp_keys, db/grants/postgres/rodauth_admin_roles.sql).
+      otp_disable_route nil
+      # two_factor_base (pulled in by otp) routes multifactor-manage and
+      # multifactor-disable as well; the latter removes EVERY second factor
+      # from the account. Same reasoning, same answer.
+      two_factor_disable_route nil
+      two_factor_manage_route nil
 
       # --- audit_logging: tag every row so production's log can tell the
       # two apps apart -------------------------------------------------------
@@ -127,6 +141,16 @@ module RodauthAdmin
         end
       end
 
+      # Enrolling TOTP writes the production account_otp_keys row: an
+      # operator did something to the shared identity, so it is an admin
+      # action, not just a Rodauth auth-log event.
+      after_otp_setup do
+        RodauthAdmin::Audit.record(
+          action: 'otp_setup', actor: account[:email], actor_account_id: account_id,
+          ip: request.ip, user_agent: request.user_agent
+        )
+      end
+
       after_two_factor_authentication do
         RodauthAdmin::Audit.record(
           action: 'two_factor_auth', actor: account[:email], actor_account_id: account_id,
@@ -148,6 +172,18 @@ module RodauthAdmin
           ip: request.ip, user_agent: request.user_agent
         )
       end
+    end
+
+    # Is the signed-in account still a Verified row in the authdb? A closed
+    # (status 3) or deleted tenant account must lose admin access on its
+    # next request, not at cookie expiry. Deliberately does not go through
+    # account_from_session: that memoizes @account, and audit_logging would
+    # then write production's logout row twice (see before_logout).
+    def session_account_open?
+      id = session_value
+      return false unless id
+
+      !account_ds(id).where(account_session_status_filter).empty?
     end
   end
 end
