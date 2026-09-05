@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Rodauth Admin</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 15px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+    header { border-bottom: 2px solid #0d7263; margin-bottom: 1.5rem; padding-bottom: .5rem; display: flex; justify-content: space-between; align-items: baseline; }
+    header h1 { font-size: 1.1rem; margin: 0; letter-spacing: .04em; text-transform: uppercase; }
+    header nav a { margin-left: 1rem; }
+    .flash { padding: .6rem .9rem; border-left: 3px solid; margin-bottom: 1rem; }
+    .flash.error { border-color: #b3261e; background: rgba(179,38,30,.08); }
+    .flash.notice { border-color: #0d7263; background: rgba(13,114,99,.08); }
+    label { display: block; margin-top: .8rem; }
+    input[type=text], input[type=email], input[type=password] { width: 100%; padding: .4rem; font: inherit; }
+    input[type=submit], button { margin-top: 1rem; padding: .5rem 1rem; font: inherit; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1rem; }
+    dt { font-weight: 600; }
+    code { font-family: ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Rodauth Admin</h1>
+    <nav>
+      <% if rodauth.logged_in? %>
+        <a href="<%= rodauth.logout_path %>">Sign out</a>
+      <% end %>
+    </nav>
+  </header>
+  <% if flash['error'] %><div class="flash error"><%= flash['error'] %></div><% end %>
+  <% if flash['notice'] %><div class="flash notice"><%= flash['notice'] %></div><% end %>
+  <%== yield %>
+</body>
+</html>

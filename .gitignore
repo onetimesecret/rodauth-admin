@@ -1,0 +1,29 @@
+# Secrets and local config
+*.env
+.env
+!.env.example
+
+# Local databases and scratch
+data/
+tmp/
+*.sqlite3
+*.sqlite3-*
+*.db
+*.log
+
+# Ruby
+.bundle/
+vendor/bundle/
+coverage/
+.byebug*
+.ruby-lsp/
+.yardoc/
+
+# Editors and agents
+.idea/
+.vscode/*
+!.vscode/settings.json
+.claude
+.serena
+.remember/
+.DS_Store

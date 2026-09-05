@@ -1,0 +1,68 @@
+# .rubocop.yml
+#
+# Mirrors the onetimesecret/onetimesecret configuration where it applies:
+# every Ruby file carries a path header and the frozen_string_literal pragma.
+
+plugins:
+  - rubocop-performance
+  - rubocop-rspec
+  - rubocop-sequel
+  - rubocop-thread_safety
+
+AllCops:
+  NewCops: enable
+  TargetRubyVersion: 3.4
+  Exclude:
+    - 'db/migrate/**/*'
+    - 'vendor/**/*'
+    - 'tmp/**/*'
+    - 'data/**/*'
+
+# Tryouts files are bare expressions followed by `#=>` expectations; the
+# "void context" and "useless assignment" cops misread them, and autocorrect
+# deletes the test bodies.
+Lint/Void:
+  Exclude:
+    - 'try/**/*'
+Lint/UselessAssignment:
+  Exclude:
+    - 'try/**/*'
+
+Style/FrozenStringLiteralComment:
+  Enabled: true
+  EnforcedStyle: always
+
+Style/Documentation:
+  Enabled: false
+
+Metrics/BlockLength:
+  Exclude:
+    - 'lib/rodauth_admin/auth.rb'
+    - 'Rakefile'
+    - 'spec/**/*'
+
+Metrics/AbcSize:
+  Exclude:
+    - 'spec/**/*'
+
+Metrics/MethodLength:
+  Max: 30
+
+# Env memoizes a handful of immutable strings read once from ENV.
+ThreadSafety/ClassInstanceVariable:
+  Exclude:
+    - 'lib/rodauth_admin/env.rb'
+
+Layout/LineLength:
+  Max: 120
+
+RSpec/ExampleLength:
+  Max: 20
+
+# Front-door specs are end-to-end flows; one example per flow, asserted
+# at each step.
+RSpec/MultipleExpectations:
+  Max: 10
+
+RSpec/SpecFilePathFormat:
+  Enabled: false
