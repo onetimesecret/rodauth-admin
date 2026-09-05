@@ -1,0 +1,43 @@
+# .github/dependabot.yml
+#
+# Two ecosystems, one PR each per week.
+#
+# Grouping everything into a single PR per ecosystem is deliberate: this is a
+# small app with one lockfile, and five separate bumps cost five CI runs and
+# five reviews for what is one decision ("take this week's updates or not").
+#
+# The github-actions ecosystem is what keeps the SHA pins in .github/workflows/
+# current. Pinning `uses:` to a commit SHA is a supply-chain measure, not a
+# freeze: without Dependabot the pins silently rot, and a stale pin is a
+# security posture that only looks good.
+---
+version: 2
+
+updates:
+  - package-ecosystem: bundler
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 2
+    groups:
+      bundler:
+        patterns: ['*']
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 2
+    groups:
+      github-actions:
+        patterns: ['*']
+    commit-message:
+      prefix: deps
