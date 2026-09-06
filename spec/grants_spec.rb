@@ -8,8 +8,9 @@ require_relative 'spec_helper'
 # grant file that is never executed proves nothing. This is the check that it
 # says what it means: run against a PostgreSQL authdb with the grant file
 # applied and three genuinely distinct roles (the `test-postgres` CI job), it
-# asserts the read-only role can read every Phase 2 table and cannot write,
-# and that admin_actions is append-only for the runtime role too.
+# asserts the read-only role can read every Phase 2 and Phase 3 table and
+# cannot write, and that admin_actions is append-only for the runtime role
+# too.
 #
 # On SQLite — the default local and CI path — there are no roles and the file
 # is inert, so the whole group skips. That is the honest outcome: the
@@ -27,6 +28,23 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
       account_login_failures
       account_active_session_keys
       account_recovery_codes
+    ]
+  end
+
+  # CHARTER §3 / the Phase 3 (account detail) block in the grant file. The
+  # Phase 1 grant file already covered these; the split keeps a regression
+  # naming the phase whose screens just went dark.
+  let(:phase_3_tables) do
+    %i[
+      account_otp_unlocks
+      account_jwt_refresh_keys
+      account_password_reset_keys
+      account_verification_keys
+      account_login_change_keys
+      account_email_auth_keys
+      account_identities
+      account_password_change_times
+      account_authentication_audit_logs
     ]
   end
 
@@ -51,10 +69,41 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
       end
     end
 
+    it 'can SELECT every table Phase 3 reads' do
+      phase_3_tables.each do |table|
+        expect { ro[table].limit(1).all }.not_to raise_error,
+                                                 "rodauth_admin_ro cannot SELECT #{table}"
+      end
+    end
+
     it 'sees the password-reuse count but never the hashes' do
       expect { ro[:account_previous_password_hashes].select(:id, :account_id).limit(1).all }.not_to raise_error
       expect { ro[:account_previous_password_hashes].select(:password_hash).limit(1).all }
         .to raise_error(Sequel::DatabaseError, /permission denied/)
+    end
+
+    # The column-scoped grant has to survive the exact shape the detail page
+    # issues: a COUNT over the column-scoped grant, never password_hash.
+    it 'counts the password-reuse history the way the detail page does' do
+      expect do
+        ro[:account_previous_password_hashes].where(account_id: 0).select(:id, :account_id).count
+      end.not_to raise_error
+    end
+
+    # The count above is one query of many. This runs the whole per-account
+    # page through the read-only role, which is the only way to catch a
+    # section whose grant is missing: every query in AccountDetail is
+    # swallowed into available: false, so a privilege regression would
+    # otherwise render as a degraded panel rather than a failing example.
+    it 'renders the account detail through the read-only role' do
+      fixture_id = migrator[:accounts].insert(email: 'ro-detail@example.com', status_id: 2)
+
+      detail = RodauthAdmin::AccountDetail.find(id: fixture_id, db: ro)
+      expect(detail.available).to be(true), "degraded: #{detail.reason}"
+      expect(detail.found).to be(true)
+
+      timeline = RodauthAdmin::AccountDetail.timeline(id: fixture_id, db: ro)
+      expect(timeline.available).to be(true), "degraded: #{timeline.reason}"
     end
 
     it 'cannot read the tables outside the capability surface' do

@@ -104,8 +104,8 @@ What that proves, and nothing else does:
   it was not deliberately given, through the password functions rather than
   the hash table;
 - the grants are **restrictive** — `spec/grants_spec.rb` asserts
-  `rodauth_admin_ro` can read every Phase 2 table, cannot see a password
-  hash, cannot call the password functions, and cannot write; and that
+  `rodauth_admin_ro` can read every Phase 2 and Phase 3 table, cannot see a
+  password hash, cannot call the password functions, and cannot write; and that
   `rodauth_admin_app` cannot UPDATE or DELETE `admin_actions`;
 - the **trigger** is the second lock — the same spec shows the migrator that
   owns `admin_actions` is refused too, which no grant can express.
