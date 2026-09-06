@@ -13,8 +13,12 @@ require_relative 'audit'
 require_relative 'auth'
 require_relative 'stats'
 require_relative 'account_list'
+require_relative 'account_detail'
 
 module RodauthAdmin
+  # rubocop:disable Metrics/ClassLength -- one routing tree plus the view
+  # helpers it needs; splitting the helpers out would put the templates'
+  # vocabulary in a different file from the routes that render them.
   class App < Roda
     VIEWS_DIR = File.expand_path('../../views', __dir__)
 
@@ -53,7 +57,7 @@ module RodauthAdmin
       view(content: '<h1>Something went wrong</h1><p>The error has been logged.</p>')
     end
 
-    route do |r|
+    route do |r| # rubocop:disable Metrics/BlockLength -- the routing tree is one expression by design
       # Public, unauthenticated: is the process up, can it see its stores?
       # No account data, no table names — a liveness probe, not a status page.
       r.get 'healthz' do
@@ -95,6 +99,45 @@ module RodauthAdmin
         response.status = 400
         @reason = e.message
         view 'accounts_filter'
+      end
+
+      # The per-account page. Two "no page" outcomes, kept apart on
+      # purpose: an id nobody has is a 404 (the operator mistyped, or the
+      # account was deleted), while an authdb that cannot answer is a 200
+      # carrying the degraded panel — the same split every other screen
+      # makes, because "we looked and there is nothing" and "we could not
+      # look" are different answers to an operator.
+      r.get 'accounts', Integer do |id|
+        @detail = AccountDetail.find(id: id)
+        if !@detail.available
+          view 'account'
+        elsif !@detail.found
+          missing(id.to_s)
+        else
+          @timeline = AccountDetail.timeline(id: id,
+                                             page: r.params['page'] || 1,
+                                             per_page: r.params['per_page'] || AccountDetail::PER_PAGE_DEFAULT)
+          view 'account'
+        end
+      end
+
+      # The lookup, and the inbound deep link from the colonel console
+      # (/account?q=<external_id>). A hit redirects rather than rendering,
+      # so the operator lands on the canonical /accounts/<id> URL and can
+      # bookmark or share it. A miss and an unreachable authdb look the
+      # same from here (AccountDetail.lookup answers nil for both), which
+      # is why the page says only that nothing matched.
+      r.get 'account' do
+        q = r.params['q']
+        # ?q[]=x arrives as an Array. Nothing but a String can be an email
+        # or an external_id, so it is the empty query, not a 500.
+        q = nil unless q.is_a?(String)
+        if q.nil? || q.strip.empty?
+          view 'lookup'
+        else
+          id = AccountDetail.lookup(q)
+          id ? r.redirect(account_path(id)) : missing(nil, q)
+        end
       end
     end
 
@@ -142,6 +185,26 @@ module RodauthAdmin
       "/accounts?filter=#{filter}&page=#{page}&per_page=#{per_page}"
     end
 
+    def account_path(id)
+      "/accounts/#{Integer(id)}"
+    end
+
+    # The timeline is the only paginated thing on the account page, so its
+    # links carry per_page and nothing else.
+    def timeline_path(id, page, per_page)
+      "#{account_path(id)}?page=#{page}&per_page=#{per_page}"
+    end
+
+    # The 404 both dead ends share: our own page, through the layout, so
+    # the operator gets the id or the query they asked for back (escaped by
+    # the render plugin) instead of the plugin's bare "Not found".
+    def missing(id, query = nil)
+      response.status = 404
+      @missing_id = id
+      @query = query
+      view 'account_missing'
+    end
+
     # The signed-in identity is still a Verified authdb account AND still
     # on the allowlist. Both are re-read from the database; neither is
     # cached in the session.
@@ -178,4 +241,5 @@ module RodauthAdmin
       'unreachable'
     end
   end
+  # rubocop:enable Metrics/ClassLength
 end

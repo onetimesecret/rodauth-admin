@@ -1,0 +1,9 @@
+<h2>Find an account</h2>
+<form method="get" action="/account">
+  <label for="q">Email or external id</label>
+  <input type="search" id="q" name="q" autocomplete="off">
+  <input type="submit" value="Find">
+</form>
+<p class="footnote">Exact match only, on <code>email</code> first and then <code>external_id</code>. No prefixes, no
+  wildcards: this is a jump box, not a search engine, and a prefix search is a way to page through the user table by
+  guessing. A match redirects to that account's page.</p>

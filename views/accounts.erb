@@ -35,7 +35,7 @@
       </tr>
       <% @list.rows.each do |row| %>
         <tr>
-          <td><%= row.email %></td>
+          <td><a href="<%= account_path(row.id) %>"><%= row.email %></a></td>
           <td><%= row.status || row.status_id %></td>
           <td>
             <% url = colonel_customer_url(row.external_id) %>
