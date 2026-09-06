@@ -22,9 +22,13 @@ module RodauthAdmin
   #    account_otp_keys.key, account_recovery_codes.code,
   #    account_webauthn_keys.public_key, or the `key` column of any of the
   #    lockout / reset / verification / login-change / email-auth /
-  #    jwt-refresh tables. The read-only PostgreSQL role is column-scoped to
-  #    match, so a slip is a hard error there and a silent leak on SQLite —
-  #    which is why the column lists below are constants, not inline.
+  #    jwt-refresh tables. The column lists in this file are the ONLY thing
+  #    keeping accounts.password_hash (rodauth-tools builds put it there) out
+  #    of the app: the read-only PostgreSQL role holds a table-wide
+  #    `GRANT SELECT ON accounts`, so PostgreSQL will not stop a slip either
+  #    — it only column-scopes account_previous_password_hashes. That is why
+  #    every dataset here selects named columns, and why the lists below are
+  #    constants rather than inline.
   #
   # 2. Not found is not an outage. A missing account is a normal answer
   #    (found: false, available: true); only Database::UNAVAILABLE_ERRORS
@@ -43,6 +47,10 @@ module RodauthAdmin
     # the true total beside them, so a pathological account cannot render a
     # multi-thousand-row table into an admin's browser.
     SESSION_CAP = 50
+    # Refresh tokens accumulate the same way (Rodauth keeps a row per issued
+    # token until its deadline is swept), so they are capped and totalled on
+    # the same terms as sessions.
+    REFRESH_TOKEN_CAP = 50
     # A session_id is a bearer-ish identifier; the page shows a prefix long
     # enough to correlate two rows and short enough to be useless if the
     # screenshot leaks.
@@ -89,7 +97,7 @@ module RodauthAdmin
     Session = Data.define(:session_id, :created_at, :last_use)
     Sessions = Data.define(:total, :capped, :rows)
     RefreshToken = Data.define(:id, :deadline, :expired)
-    RefreshTokens = Data.define(:total, :rows)
+    RefreshTokens = Data.define(:total, :capped, :rows)
     PendingToken = Data.define(:type, :present, :deadline, :requested_at, :expired, :email_last_sent, :login)
     Identity = Data.define(:id, :provider, :issuer, :uid)
     Password = Data.define(:changed_at, :age_days, :previous_hash_count)
@@ -161,7 +169,10 @@ module RodauthAdmin
       # The email match is tried case-sensitively first so it uses the
       # unique index, then once more folded through LOWER(). The fallback is
       # a seq scan, but it only runs for a mixed-case paste that already
-      # missed, never on the hot path.
+      # missed, never on the hot path. Ruby's String#downcase and SQL's
+      # lower() do not agree on every non-ASCII codepoint, so the folded pass
+      # is an ASCII-email convenience, not a Unicode-correct match; an address
+      # that only differs outside ASCII has to be pasted exactly.
       #
       # @return [Integer, nil] nil for an empty query, no match, or an
       #   unreachable authdb (a lookup that cannot answer is not a match)
@@ -198,8 +209,13 @@ module RodauthAdmin
 
       # Everything that touches the database for #find, and only that.
       # Returns nil for "no such account", a QueryFailure for an outage, and
-      # a keyword hash of sections otherwise. Data building happens in the
-      # caller so a bug there is never reported as an outage.
+      # a keyword hash of sections otherwise. The section builders run inside
+      # this rescue, so the separation is by exception class, not by call
+      # site: only Database::UNAVAILABLE_ERRORS degrade the page, and a bug
+      # in a builder (NoMethodError, TypeError) propagates as itself.
+      # Honestly: a query-shape error does not. A column missing on an older
+      # authdb raises Sequel::DatabaseError and is reported as unavailable,
+      # the same trade Phase 2's query blocks make.
       def sections(id, db, now)
         account = account_row(db, id)
         return nil if account.nil?
@@ -228,9 +244,13 @@ module RodauthAdmin
       end
 
       # db.schema, not db[:accounts].columns: the latter probes with
-      # `SELECT * ... LIMIT 0`, which PostgreSQL refuses for a role that is
-      # denied SELECT on accounts.password_hash. db.schema reads the
-      # catalog (PRAGMA on SQLite) and needs no column privilege.
+      # `SELECT * ... LIMIT 0`, and a `SELECT *` on accounts is exactly what
+      # this file refuses to issue — password_hash lives on that table on
+      # rodauth-tools builds, and the read-only role's table-wide
+      # `GRANT SELECT ON accounts` would happily return it (AccountList does
+      # run .columns on this role today; that is a probe, not a page). Only
+      # the explicit column list keeps the hash out. db.schema reads the
+      # catalog (PRAGMA on SQLite) and touches no row at all.
       def account_columns(db)
         present = db.schema(:accounts).map(&:first)
         ACCOUNT_COLUMNS + ACCOUNT_TIMESTAMPS.select { |c| present.include?(c) }
@@ -316,17 +336,19 @@ module RodauthAdmin
       end
 
       def refresh_tokens(db, id, now)
-        rows = refresh_token_rows(db, id, now)
-        RefreshTokens.new(total: rows.length, rows: rows).freeze
+        base = db[:account_jwt_refresh_keys].where(account_id: id)
+        rows = refresh_token_rows(base, now)
+        total = base.count
+        RefreshTokens.new(total: total, capped: total > rows.length, rows: rows).freeze
       end
 
-      def refresh_token_rows(db, id, now)
-        db[:account_jwt_refresh_keys].where(account_id: id)
-                                     .order(Sequel.desc(:deadline), :id)
-                                     .select(:id, :deadline, live(:deadline, now))
-                                     .map do |row|
-          RefreshToken.new(expired: !live?(row), **fields(row, :id, :deadline)).freeze
-        end.freeze
+      def refresh_token_rows(base, now)
+        base.order(Sequel.desc(:deadline), :id)
+            .select(:id, :deadline, live(:deadline, now))
+            .limit(REFRESH_TOKEN_CAP)
+            .map do |row|
+              RefreshToken.new(expired: !live?(row), **fields(row, :id, :deadline)).freeze
+            end.freeze
       end
 
       # Always one row per token type, present or not, so the view renders a

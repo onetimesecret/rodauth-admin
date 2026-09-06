@@ -137,6 +137,9 @@
         </tr>
       <% end %>
     </table>
+    <% if tokens.capped %>
+      <p class="footnote">showing <%= tokens.rows.length %> of <%= tokens.total %>, latest deadline first.</p>
+    <% end %>
     <p class="footnote">total <%= tokens.total %>. The token keys themselves are never selected.</p>
   <% end %>
 

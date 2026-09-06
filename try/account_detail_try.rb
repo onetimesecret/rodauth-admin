@@ -106,8 +106,18 @@ s = RodauthAdmin::AccountDetail.find(id: @full, db: @db, now: @now).sessions
 
 ## Refresh tokens carry their own expiry verdict
 t = RodauthAdmin::AccountDetail.find(id: @full, db: @db, now: @now).refresh_tokens
-[t.total, t.rows.map(&:expired)]
-#=> [2, [false, true]]
+[t.total, t.capped, t.rows.map(&:expired)]
+#=> [2, false, [false, true]]
+
+## The refresh-token list is capped, and reports the true total beside it
+@capped_tokens = @db[:accounts].insert(email: 'capped-tokens@example.com', status_id: 2)
+60.times do |i|
+  @db[:account_jwt_refresh_keys].insert(account_id: @capped_tokens, key: format('rk-%04d', i),
+                                        deadline: @now + 3600 + i)
+end
+t = RodauthAdmin::AccountDetail.find(id: @capped_tokens, db: @db, now: @now).refresh_tokens
+[t.total, t.capped, t.rows.length]
+#=> [60, true, 50]
 
 ## Pending tokens are one fixed row per type, expired computed per deadline
 p = RodauthAdmin::AccountDetail.find(id: @full, db: @db, now: @now).pending_tokens

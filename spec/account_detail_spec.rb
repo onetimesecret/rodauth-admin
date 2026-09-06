@@ -170,7 +170,17 @@ RSpec.describe RodauthAdmin::App do
       body = last_response.body
 
       expect(body).to include('password_reset', 'verification', 'login_change', 'email_auth')
-      expect(body).to include('live', 'expired')
+      # Pinned to the row, not to the page: `include('live', 'expired')`
+      # passes on the footnote text alone, and would still pass with the two
+      # verdicts swapped. The seeded password_reset deadline is an hour out
+      # and the login_change one an hour past, so these two cells are the
+      # assertion (views/account.erb: type, present, deadline, expired).
+      expect(body).to match(
+        %r{<td><code>password_reset</code></td>\s*<td>yes</td>\s*<td>[^<]*</td>\s*<td>live</td>}m
+      )
+      expect(body).to match(
+        %r{<td><code>login_change</code></td>\s*<td>yes</td>\s*<td>[^<]*</td>\s*<td>expired</td>}m
+      )
       expect(body).to include('new@example.com'), 'the login-change target is the point of that row'
       expect(body).to include('no answer for it')
     end

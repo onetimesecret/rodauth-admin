@@ -37,7 +37,6 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
   let(:phase_3_tables) do
     %i[
       account_otp_unlocks
-      account_webauthn_user_ids
       account_jwt_refresh_keys
       account_password_reset_keys
       account_verification_keys
@@ -84,9 +83,27 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
     end
 
     # The column-scoped grant has to survive the exact shape the detail page
-    # issues: a COUNT over an explicitly selected column, never password_hash.
+    # issues: a COUNT over the column-scoped grant, never password_hash.
     it 'counts the password-reuse history the way the detail page does' do
-      expect { ro[:account_previous_password_hashes].where(account_id: 0).select(:id).count }.not_to raise_error
+      expect do
+        ro[:account_previous_password_hashes].where(account_id: 0).select(:id, :account_id).count
+      end.not_to raise_error
+    end
+
+    # The count above is one query of many. This runs the whole per-account
+    # page through the read-only role, which is the only way to catch a
+    # section whose grant is missing: every query in AccountDetail is
+    # swallowed into available: false, so a privilege regression would
+    # otherwise render as a degraded panel rather than a failing example.
+    it 'renders the account detail through the read-only role' do
+      fixture_id = migrator[:accounts].insert(email: 'ro-detail@example.com', status_id: 2)
+
+      detail = RodauthAdmin::AccountDetail.find(id: fixture_id, db: ro)
+      expect(detail.available).to be(true), "degraded: #{detail.reason}"
+      expect(detail.found).to be(true)
+
+      timeline = RodauthAdmin::AccountDetail.timeline(id: fixture_id, db: ro)
+      expect(timeline.available).to be(true), "degraded: #{timeline.reason}"
     end
 
     it 'cannot read the tables outside the capability surface' do
