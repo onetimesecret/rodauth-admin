@@ -70,6 +70,7 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
       account_active_session_keys
       account_jwt_refresh_keys
       account_identities
+      account_remember_keys
     ]
   end
 
@@ -133,8 +134,16 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
       expect(timeline.available).to be(true), "degraded: #{timeline.reason}"
     end
 
+    # The count is a capability (the revoke-sessions confirm page states how
+    # many remember-me cookies it is about to invalidate); the token is not.
+    it 'counts remember-me tokens but never reads one' do
+      expect { ro[:account_remember_keys].select(:id, :deadline).limit(1).all }.not_to raise_error
+      expect { ro[:account_remember_keys].select(:key).limit(1).all }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+    end
+
     it 'cannot read the tables outside the capability surface' do
-      %i[account_password_hashes account_remember_keys account_session_keys account_sms_codes].each do |table|
+      %i[account_password_hashes account_session_keys account_sms_codes].each do |table|
         expect { ro[table].limit(1).all }.to raise_error(Sequel::DatabaseError, /permission denied/),
                                              "rodauth_admin_ro can read #{table}"
       end
@@ -195,9 +204,55 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
     end
 
     it 'can SELECT the rows it is about to delete' do
-      (verb_tables + %i[accounts account_statuses account_password_change_times]).each do |table|
+      # account_remember_keys is column-scoped and so is asserted separately
+      # below; admin_operators is what the operator-target refusal reads.
+      selectable = verb_tables - %i[account_remember_keys]
+      (selectable + %i[accounts account_password_change_times admin_operators]).each do |table|
         expect { verbs[table].limit(1).all }
           .not_to raise_error, "rodauth_admin_verbs cannot SELECT #{table}"
+      end
+    end
+
+    # revoke_sessions deletes remember-me rows WHERE id = ?, which PostgreSQL
+    # will not plan without SELECT on the columns the clause names. The token
+    # itself stays unreadable to the role that deletes it.
+    it 'reads a remember-me row by id and deadline, never its key' do
+      expect { verbs[:account_remember_keys].select(:id, :deadline).limit(1).all }.not_to raise_error
+      expect { verbs[:account_remember_keys].select(:key).limit(1).all }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+    end
+
+    # Everything a mutation credential must NOT be able to do. Each of these
+    # is a way a support tool would quietly become an authentication bypass:
+    # re-keying a second factor, forging or editing evidence, or granting
+    # itself an operator.
+    it 'cannot UPDATE the second-factor tables' do
+      expect { verbs[:account_otp_keys].where(false).update(num_failures: 0) }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+      expect { verbs[:account_webauthn_keys].where(false).update(sign_count: 0) }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+    end
+
+    it "cannot write Rodauth's own auth log" do
+      expect { verbs[:account_authentication_audit_logs].insert(account_id: 0, message: 'forged') }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+    end
+
+    it 'can read admin_operators but cannot change who is one' do
+      expect { verbs[:admin_operators].limit(1).all }.not_to raise_error
+      expect { verbs[:admin_operators].insert(account_id: 0, email: 'x@example.com', added_by: 'spec') }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+      expect { verbs[:admin_operators].where(false).update(email: 'x@example.com') }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+      expect { verbs[:admin_operators].where(false).delete }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+    end
+
+    it 'cannot read the tables outside its mutation surface' do
+      %i[account_previous_password_hashes account_session_keys account_sms_codes].each do |table|
+        expect { verbs[table].limit(1).all }
+          .to raise_error(Sequel::DatabaseError, /permission denied/),
+              "rodauth_admin_verbs can read #{table}"
       end
     end
 

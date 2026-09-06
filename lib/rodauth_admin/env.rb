@@ -15,6 +15,9 @@ module RodauthAdmin
   #   ADMIN_DATABASE_URL             runtime "app" user: the Rodauth login
   #                                  path plus the admin's own tables
   #   ADMIN_DATABASE_URL_RO          read-only user: every admin query
+  #   ADMIN_DATABASE_URL_VERBS       mutation user: the Phase 4 verbs and
+  #                                  the admin_actions row each one commits
+  #                                  in the same transaction
   #   ADMIN_DATABASE_URL_MIGRATIONS  the tenant app's existing migrator,
   #                                  used only by `rake db:migrate` offline
   module Env

@@ -7,6 +7,7 @@ require 'sequel'
 
 require_relative 'audit'
 require_relative 'account_detail'
+require_relative 'allowlist'
 require_relative 'database'
 
 module RodauthAdmin
@@ -57,6 +58,14 @@ module RodauthAdmin
     # reason field attached.
     class SelfTarget < RodauthAdmin::Error; end
 
+    # Refused because the target is another operator of this tool. Its
+    # second factor is not a support ticket: an operator whose phone is
+    # gone has it fixed in the tenant app, or is offboarded from the
+    # allowlist. Without this, two operators are one social-engineering
+    # call away from stripping each other's MFA with a reason field
+    # attached, which is the SelfTarget hole with an extra step.
+    class OperatorTarget < RodauthAdmin::Error; end
+
     # Refused because the account has no OTP key and no WebAuthn key.
     # Recovery codes are a backup for a second factor; minting them for an
     # account that has none creates a password-only login path that looks
@@ -98,8 +107,21 @@ module RodauthAdmin
       'revoke-refresh-keys' => :revoke_refresh_keys
     }.freeze
 
-    # Verbs refused on the operator's own account.
+    # Verbs refused on the operator's own account, and on any other
+    # operator's account (SelfTarget / OperatorTarget).
     SELF_REFUSED = %i[disable_mfa regenerate_recovery_codes].freeze
+
+    # A refusal is a fact about what an operator tried, so it is recorded in
+    # admin_actions under '<verb>_refused' (Audit::REFUSAL_SUFFIX) with the
+    # reason they typed and the refusal named in metadata. The verb's own
+    # transaction has rolled back by the time we know, so the row is written
+    # on its own afterwards -- see record_refusal. Audit::BlankReason is
+    # deliberately absent: a blank reason is a form error, not an attempt.
+    REFUSALS = {
+      SelfTarget => 'self_target',
+      OperatorTarget => 'operator_target',
+      NoSecondFactor => 'no_second_factor'
+    }.freeze
 
     # Who is acting. account_id is the actor's row in this same authdb (the
     # operator logs in through it), and is what SelfTarget compares against.
@@ -135,6 +157,7 @@ module RodauthAdmin
       account_lockouts account_login_failures account_password_reset_keys
       account_verification_keys account_login_change_keys account_email_auth_keys
       account_otp_keys account_otp_unlocks account_recovery_codes account_webauthn_user_ids
+      account_remember_keys
     ].freeze
 
     LOCKOUT_TABLES = %i[account_lockouts account_login_failures].freeze
@@ -146,6 +169,15 @@ module RodauthAdmin
       account_otp_keys account_otp_unlocks account_recovery_codes
       account_webauthn_keys account_webauthn_user_ids
     ].freeze
+
+    # What revoke_sessions clears. account_remember_keys is in the list
+    # because it is the half that actually bites today: the tenant app does
+    # not call check_active_session -- its session gate reads its own Redis
+    # session blob -- so deleting a session-key row signs nobody out, but it
+    # does enable :remember, and a remember cookie carries a 14-day
+    # deadline. Without this table a customer with a stolen "keep me signed
+    # in" cookie walks back in after every revoke.
+    SESSION_TABLES = %i[account_active_session_keys account_remember_keys].freeze
 
     # rubocop:disable Metrics/ClassLength -- see the module note above.
     class << self
@@ -218,15 +250,23 @@ module RodauthAdmin
           [{ account_recovery_codes: codes.length },
            { deleted: deleted, generated: codes.length }] # never the codes themselves
         end
-        result.with(codes: codes.freeze)
+        result.with(codes: codes.freeze).freeze
       end
 
-      # active_sessions: every SQL session row. The tenant app checks this
-      # table on each request, so the customer is signed out everywhere.
+      # Both halves of "sign this customer out": the active_sessions rows and
+      # the remember-me tokens.
+      #
+      # KNOWN GAP (verified against the tenant app, 2026-09-05): the tenant
+      # never calls Rodauth's check_active_session, so deleting
+      # account_active_session_keys does not end a live browser session
+      # today. The rows are cleared anyway -- they are the state the tenant
+      # will consult the day it enforces that call, and a half-cleared
+      # session table would then be worse than none. The remember-me
+      # deletion is effective now (docs/design/mutations.md). The confirm
+      # page says exactly this.
       def revoke_sessions(id:, actor:, reason:, db: Database.verbs)
         run(:revoke_sessions, id: id, actor: actor, reason: reason, db: db) do |account_id, conn|
-          deleted = conn[:account_active_session_keys].where(account_id: account_id).delete
-          counts = { account_active_session_keys: deleted }
+          counts = delete_all(conn, SESSION_TABLES, account_id)
           [counts, counts]
         end
       end
@@ -248,11 +288,11 @@ module RodauthAdmin
       # issuer go into metadata; uid does not — for most providers it is the
       # customer's email address.
       def unlink_identity(id:, identity_id:, actor:, reason:, db: Database.verbs)
+        # Coerced here, not interpolated: an Array reaching Sequel's where
+        # would silently become `id IN (...)` and unlink more than one.
+        identity_id = coerce_id(identity_id)
         run(:unlink_identity, id: id, actor: actor, reason: reason, db: db) do |account_id, conn|
-          row = conn[:account_identities].where(id: identity_id, account_id: account_id)
-                                         .select(:id, :provider, :issuer).first
-          raise NotFound, "identity #{identity_id} is not on account #{account_id}" if row.nil?
-
+          row = identity_row(conn, account_id, identity_id)
           deleted = conn[:account_identities].where(id: row[:id], account_id: account_id).delete
           raise NotFound, "identity #{identity_id} is not on account #{account_id}" if deleted.zero?
 
@@ -277,7 +317,13 @@ module RodauthAdmin
         return not_found_preview(detail.id) unless detail.found
 
         Preview.new(available: true, reason: nil, found: true, account_id: detail.id,
-                    counts: preview_counts(detail).freeze, identities: detail.identities).freeze
+                    counts: preview_counts(detail, db).freeze, identities: detail.identities).freeze
+      rescue Sequel::Error => e
+        # AccountDetail swallows its own outages; the one count taken here
+        # directly (account_remember_keys) has to degrade the same way, or a
+        # missing grant would surface as a 500 on the confirm page instead of
+        # the degraded panel every other read screen renders.
+        unreadable_preview(id, e)
       end
 
       private
@@ -285,24 +331,34 @@ module RodauthAdmin
       # The shared body of every verb: validate, resolve, refuse, mutate and
       # record in one transaction. The block returns [counts, metadata] and
       # runs with the transaction's connection.
-      def run(action, id:, actor:, reason:, db:)
+      def run(action, id:, actor:, reason:, db:, &)
         reason = check_reason(action, reason)
         account_id = coerce_id(id)
+        account, counts, metadata = mutate(action, account_id, actor, reason, db, &)
+
+        Result.new(action: action, account_id: account_id, target: account[:email],
+                   counts: counts.freeze, metadata: metadata.freeze, codes: nil).freeze
+      end
+
+      # One transaction, both halves, and the refusals recorded outside it.
+      # The rescue lives here rather than in `run` because this is where the
+      # resolved account row is in scope: a refusal names its target.
+      def mutate(action, account_id, actor, reason, db)
         account = nil
         counts = nil
         metadata = nil
-
         db.transaction do
           account = account_row(db, account_id)
           raise NotFound, "no account #{account_id}" if account.nil?
 
-          refuse_self(action, account_id, actor)
+          refuse(action, account_id, actor, db)
           counts, metadata = yield(account_id, db)
           record(action, account, actor, reason, counts, metadata, db)
         end
-
-        Result.new(action: action, account_id: account_id, target: account[:email],
-                   counts: counts.freeze, metadata: metadata.freeze, codes: nil).freeze
+        [account, counts, metadata]
+      rescue *REFUSALS.keys => e
+        record_refusal(action, account, actor, reason, e, db)
+        raise
       end
 
       # Raised here, before the transaction opens, so no verb can reach a
@@ -326,11 +382,25 @@ module RodauthAdmin
         db[:accounts].where(id: account_id).select(:id, :email).first
       end
 
-      def refuse_self(action, account_id, actor)
+      # Both operator refusals, inside the transaction and immediately after
+      # account_row, so neither can race an offboarding.
+      def refuse(action, account_id, actor, db)
         return unless SELF_REFUSED.include?(action)
-        return unless actor.account_id && Integer(actor.account_id, exception: false) == account_id
 
-        raise SelfTarget, "#{action} is refused on the operator's own account"
+        if actor.account_id && Integer(actor.account_id, exception: false) == account_id
+          raise SelfTarget, "#{action} is refused on the operator's own account"
+        end
+
+        refuse_operator(action, account_id, db)
+      end
+
+      # The same refusal, one step out: a fellow operator's account. Decided
+      # by reading admin_operators rather than by trusting anything in the
+      # request; the verbs role holds SELECT on that table for exactly this.
+      def refuse_operator(action, account_id, db)
+        return if db[Allowlist::TABLE].where(account_id: account_id).empty?
+
+        raise OperatorTarget, "#{action} is refused on another operator's account"
       end
 
       # rubocop:disable Metrics/ParameterLists -- the audit contract, spelled out.
@@ -344,6 +414,34 @@ module RodauthAdmin
         )
       end
       # rubocop:enable Metrics/ParameterLists
+
+      # The refusal's own row, written after the verb's transaction has
+      # rolled back and before the error reaches the web layer: a refused
+      # attempt is exactly the thing an audit trail is read for. Its own
+      # transaction, on the same connection, so it commits on its own.
+      # Recorded even when the account was never resolved (a refusal that
+      # raced a deletion), hence the nil-safe target.
+      # rubocop:disable Metrics/ParameterLists -- the audit contract, again.
+      def record_refusal(action, account, actor, reason, error, db)
+        db.transaction do
+          Audit.record(
+            db: db, action: "#{action}#{Audit::REFUSAL_SUFFIX}", reason: reason,
+            actor: actor.email, actor_account_id: actor.account_id,
+            target_account_id: account && account[:id], target: account && account[:email],
+            ip: actor.ip, user_agent: actor.user_agent,
+            metadata: { refusal: REFUSALS.fetch(error.class) }
+          )
+        end
+      end
+      # rubocop:enable Metrics/ParameterLists
+
+      def identity_row(db, account_id, identity_id)
+        row = db[:account_identities].where(id: identity_id, account_id: account_id)
+                                     .select(:id, :provider, :issuer).first
+        raise NotFound, "identity #{identity_id} is not on account #{account_id}" if row.nil?
+
+        row
+      end
 
       def delete_all(db, tables, account_id)
         tables.to_h { |t| [t, db[t].where(account_key(t) => account_id).delete] }
@@ -377,7 +475,7 @@ module RodauthAdmin
         end
       end
 
-      def preview_counts(detail)
+      def preview_counts(detail, db)
         lockout = detail.lockout
         mfa = detail.mfa
         {
@@ -388,10 +486,20 @@ module RodauthAdmin
           disable_mfa: mfa_preview(mfa),
           regenerate_recovery_codes: { account_recovery_codes: mfa.recovery_code_rows,
                                        second_factor: second_factor_present?(mfa) },
-          revoke_sessions: { account_active_session_keys: detail.sessions.total },
+          revoke_sessions: sessions_preview(detail, db),
           revoke_refresh_keys: { account_jwt_refresh_keys: detail.refresh_tokens.total },
           unlink_identity: { account_identities: detail.identities.length }
         }
+      end
+
+      # The read-only role holds SELECT (id, deadline) on
+      # account_remember_keys for this count and nothing else; the key column
+      # is never readable by any of the three roles, so the count is taken
+      # here rather than through AccountDetail (which shows rows, and there
+      # is no row here worth showing).
+      def sessions_preview(detail, db)
+        { account_active_session_keys: detail.sessions.total,
+          account_remember_keys: db[:account_remember_keys].where(id: detail.id).count }
       end
 
       def lockout_preview(lockout)
@@ -428,6 +536,11 @@ module RodauthAdmin
       def unavailable_preview(detail)
         Preview.new(available: false, reason: detail.reason, found: false,
                     account_id: detail.id, counts: nil, identities: nil).freeze
+      end
+
+      def unreadable_preview(account_id, error)
+        Preview.new(available: false, reason: error.message, found: false,
+                    account_id: account_id, counts: nil, identities: nil).freeze
       end
 
       def not_found_preview(account_id)

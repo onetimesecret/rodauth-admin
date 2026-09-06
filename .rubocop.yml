@@ -74,12 +74,14 @@ RSpec/ExampleLength:
 RSpec/MultipleExpectations:
   Max: 10
 
-# A `before` hook that walks the operator through the front door has one
-# thing to hand the examples afterwards (the TOTP secret it minted); an
-# instance variable is how RSpec passes it.
+# The mutations spec's `before` hook walks the operator through the front
+# door and has one thing to hand the examples afterwards (the TOTP secret it
+# minted, needed to re-authenticate mid-example); an instance variable is how
+# RSpec passes it. Scoped to that one file: nowhere else needs it, and a
+# suite-wide exclusion would stop the cop catching the next one.
 RSpec/InstanceVariable:
   Exclude:
-    - 'spec/**/*'
+    - 'spec/mutations_spec.rb'
 
 RSpec/SpecFilePathFormat:
   Enabled: false

@@ -58,6 +58,12 @@
       recovery codes in the tenant app.</p>
   <% end %>
 
+  <% if @operator_target %>
+    <p class="degraded">This account belongs to another operator of this tool. This verb is refused on it: another
+      operator&rsquo;s second factor is not a support ticket &mdash; they change it in the tenant app, or they are
+      offboarded from the allowlist.</p>
+  <% end %>
+
   <% no_factor = @slug == 'regenerate-recovery-codes' && @counts && @counts[:second_factor] == false %>
   <% if no_factor %>
     <p class="degraded">This account has no TOTP or WebAuthn key, so there is no second factor for recovery codes to
@@ -70,6 +76,6 @@
     <textarea id="reason" name="reason" rows="3" cols="60" required></textarea>
     <p class="footnote">Say what happened and where it came from: a ticket number, a call, an incident. This is the
       row a future reader has to judge this by.</p>
-    <input type="submit" value="<%= @copy[:title] %>"<%= (@self_target || no_factor) ? ' disabled' : '' %>>
+    <input type="submit" value="<%= @copy[:title] %>"<%= (@self_target || @operator_target || no_factor) ? ' disabled' : '' %>>
   </form>
 <% end %>

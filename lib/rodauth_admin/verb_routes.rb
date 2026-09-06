@@ -2,7 +2,9 @@
 #
 # frozen_string_literal: true
 
+require_relative 'allowlist'
 require_relative 'audit'
+require_relative 'database'
 require_relative 'verbs'
 
 module RodauthAdmin
@@ -72,22 +74,28 @@ module RodauthAdmin
         title: 'Disable MFA',
         does: 'Deletes the TOTP key, the OTP unlock row, every unused recovery code and every ' \
               'WebAuthn key. The customer signs in with their password alone until they enrol again.',
-        note: 'Refused on your own account: operators change their own MFA in the tenant app.',
+        note: 'Refused on your own account and on any other operator\'s: operators change their own MFA in ' \
+              'the tenant app, or are offboarded from the allowlist.',
         empty: 'This account has no second factor on file: nothing to remove. The action is still recorded.'
       },
       'regenerate-recovery-codes' => {
         title: 'Regenerate recovery codes',
         does: 'Deletes the account\'s existing recovery codes and mints a fresh set. The new codes ' \
               'are shown once, on the next page, and are not recoverable afterwards.',
-        note: 'Refused on your own account, and refused when the account has no TOTP or WebAuthn key ' \
+        note: 'Refused on your own account and on any other operator\'s, and refused when the account has ' \
+              'no TOTP or WebAuthn key ' \
               '— recovery codes without a second factor are a password-only login path that looks like MFA.',
         empty: 'This account has no recovery codes on file; a fresh set is minted regardless.'
       },
       'revoke-sessions' => {
         title: 'Revoke sessions',
-        does: 'Deletes every active session key, signing the customer out of the tenant app everywhere.',
-        note: nil,
-        empty: 'There are no active session keys: nothing to remove. The action is still recorded.'
+        does: 'Deletes the account\'s Rodauth session-key rows and every remember-me token, so a saved ' \
+              '"keep me signed in" cookie stops working immediately.',
+        note: 'The tenant app does not currently consult the session-key table (it checks its own session ' \
+              'store), so a browser window that is already open is NOT signed out by this. The remember-me ' \
+              'deletion takes effect now; the session-key rows will bite once the tenant enforces ' \
+              'check_active_session.',
+        empty: 'There are no session keys and no remember-me tokens: nothing to remove. The action is still recorded.'
       },
       'revoke-refresh-keys' => {
         title: 'Revoke API refresh tokens',
@@ -110,9 +118,20 @@ module RodauthAdmin
     SELF_REFUSAL = { status: 403,
                      message: 'Refused: this is your own account. Operators change their own MFA and ' \
                               'recovery codes in the tenant app.' }.freeze
+    OPERATOR_REFUSAL = { status: 403,
+                         message: 'Refused: this account belongs to another operator of this tool. Another ' \
+                                  'operator\'s second factor is not a support ticket — they change it in the ' \
+                                  'tenant app, or they are offboarded from the allowlist.' }.freeze
     NO_FACTOR_REFUSAL = { status: 422,
                           message: 'Refused: this account has no TOTP or WebAuthn key, so recovery codes ' \
                                    'would be a password-only login path that looks like MFA.' }.freeze
+    # preview's counts carry two keys that are not table row counts:
+    # login_failure_number (the counter's value, which is an Integer and so
+    # cannot be told apart by type) and second_factor (a boolean). Filtering
+    # by key rather than by type is what keeps the clear-lockout confirm page
+    # from listing "login_failure_number 4" as a table it is about to empty.
+    NON_TABLE_KEYS = %i[login_failure_number second_factor].freeze
+
     BLANK_REASON_REFUSAL = { status: 422,
                              message: 'A reason is required. Every mutation is recorded with one.' }.freeze
 
@@ -168,6 +187,8 @@ module RodauthAdmin
       missing(id.to_s)
     rescue Verbs::SelfTarget
       verb_confirm(req, id, slug, identity_id: identity_id, refusal: SELF_REFUSAL)
+    rescue Verbs::OperatorTarget
+      verb_confirm(req, id, slug, identity_id: identity_id, refusal: OPERATOR_REFUSAL)
     rescue Verbs::NoSecondFactor
       verb_confirm(req, id, slug, identity_id: identity_id, refusal: NO_FACTOR_REFUSAL)
     rescue Audit::BlankReason
@@ -213,10 +234,25 @@ module RodauthAdmin
       @copy = COPY.fetch(slug)
       @error = refusal && refusal[:message]
       @counts = preview_counts_for(slug)
-      @self_target = Verbs::SELF_REFUSED.include?(verb_method(slug)) &&
-                     rodauth.session_value == id
+      @self_target = mfa_verb?(slug) && rodauth.session_value == id
+      @operator_target = mfa_verb?(slug) && !@self_target && operator_account?(id)
       response.status = refusal[:status] if refusal
       view 'verb'
+    end
+
+    # The two verbs refused on an operator's account, whether the operator is
+    # the one signed in (SelfTarget) or a colleague (OperatorTarget).
+    def mfa_verb?(slug) = Verbs::SELF_REFUSED.include?(verb_method(slug))
+
+    # Is this account an operator of this tool? Read on the read-only
+    # credential, like everything else the pages display, and failing CLOSED:
+    # an authdb that cannot answer hides the two buttons rather than offering
+    # a button the verb layer will refuse anyway (it re-reads the same table
+    # inside the transaction, which is the check that counts).
+    def operator_account?(account_id)
+      Allowlist.allowed?(account_id, db: Database.readonly)
+    rescue Sequel::Error
+      true
     end
 
     # For unlink the preview counts every identity on the account; that page
@@ -241,10 +277,8 @@ module RodauthAdmin
       "#{account_path(id)}/#{slug}"
     end
 
-    # Only the Integer table counts; preview adds two non-count keys
-    # (login_failure_number, second_factor) that are not rows.
     def verb_row_counts(counts)
-      (counts || {}).select { |_k, v| v.is_a?(Integer) }
+      (counts || {}).except(*NON_TABLE_KEYS)
     end
 
     def nothing_to_do?(counts)

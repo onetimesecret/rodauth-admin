@@ -54,6 +54,13 @@ GRANT CONNECT ON DATABASE :"dbname" TO rodauth_admin_app, rodauth_admin_ro, roda
 
 GRANT USAGE ON SCHEMA public TO rodauth_admin_app, rodauth_admin_ro, rodauth_admin_verbs;
 
+-- PostgreSQL 14 and earlier grant CREATE on schema public to PUBLIC by
+-- default, so "no role here can run DDL" would silently not hold on those
+-- versions: every one of these roles could create its own tables (and
+-- functions) in the schema it already has USAGE on. 15+ revoked it upstream;
+-- this line makes the property true on both.
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+
 -- ============================================================================
 -- rodauth_admin_app: the login door + the admin's own tables
 -- ============================================================================
@@ -193,8 +200,16 @@ TO rodauth_admin_ro;
 -- Password reuse history: the COUNT is a capability, the hashes never are.
 GRANT SELECT (id, account_id) ON account_previous_password_hashes TO rodauth_admin_ro;
 
--- Never: account_password_hashes, account_remember_keys, account_session_keys,
--- account_sms_codes. Not in the capability table, so not readable.
+-- Remember-me tokens: same precedent, same shape. The revoke-sessions
+-- confirm page states how many "keep me signed in" cookies the verb is about
+-- to invalidate, which is a capability; the token in `key` is a credential
+-- and stays unreadable. `deadline` is granted because it is the only thing
+-- that makes the count meaningful (an expired row signs nobody in).
+GRANT SELECT (id, deadline) ON account_remember_keys TO rodauth_admin_ro;
+
+-- Never: account_password_hashes, account_session_keys, account_sms_codes,
+-- and account_remember_keys.key. Not in the capability table, so not
+-- readable.
 
 -- ============================================================================
 -- rodauth_admin_verbs: the Phase 4 mutations (CHARTER §6 item 4)
@@ -216,16 +231,22 @@ GRANT SELECT (id, account_id) ON account_previous_password_hashes TO rodauth_adm
 --                               account_webauthn_keys,
 --                               account_webauthn_user_ids
 --   regenerate_recovery_codes   DELETE + INSERT account_recovery_codes
---   revoke_sessions             DELETE account_active_session_keys
+--   revoke_sessions             DELETE account_active_session_keys,
+--                               account_remember_keys
 --   revoke_refresh_keys         DELETE account_jwt_refresh_keys
 --   unlink_identity             DELETE account_identities
 --
 -- SELECT accompanies every mutation: a verb reads the rows it is about to
 -- remove so the confirm page and the audit metadata can state the counts.
+-- account_statuses is NOT in the list: the verbs never read a status name
+-- (the confirm pages come from the read-only role's preview), and a grant
+-- nothing exercises is a grant nobody notices going stale.
+-- admin_operators IS in it: disable_mfa and regenerate_recovery_codes refuse
+-- on a fellow operator's account, and that check reads this table inside the
+-- verb's own transaction.
 
 GRANT SELECT ON
   accounts,
-  account_statuses,
   account_lockouts,
   account_login_failures,
   account_password_reset_keys,
@@ -261,8 +282,17 @@ GRANT DELETE ON
   account_webauthn_user_ids,
   account_active_session_keys,
   account_jwt_refresh_keys,
-  account_identities
+  account_identities,
+  account_remember_keys
 TO rodauth_admin_verbs;
+
+-- revoke_sessions clears remember-me tokens as well as session keys: the
+-- tenant app does not consult account_active_session_keys today, so the
+-- remember cookie is the half of "sign this customer out" that bites. The
+-- SELECT is column-scoped (`key` stays unreadable, as for every role here)
+-- and is not optional: PostgreSQL needs SELECT on the columns a DELETE's
+-- WHERE clause names, and this one is `WHERE id = ?`.
+GRANT SELECT (id, deadline) ON account_remember_keys TO rodauth_admin_verbs;
 
 -- regenerate_recovery_codes writes the replacement codes.
 GRANT INSERT ON account_recovery_codes TO rodauth_admin_verbs;
@@ -281,7 +311,8 @@ GRANT USAGE, SELECT ON SEQUENCE admin_actions_id_seq TO rodauth_admin_verbs;
 -- Never, for this role: account_password_hashes (a verb that could touch it
 -- would be setting passwords, which this tool does not do — force_password_reset
 -- expires the password, it does not change it), account_previous_password_hashes,
--- account_remember_keys, account_session_keys, account_sms_codes,
+-- account_remember_keys.key (the token itself; the role deletes those rows
+-- without ever being able to read one), account_session_keys, account_sms_codes,
 -- account_authentication_audit_logs (Rodauth's own log is evidence; the admin
 -- appends to admin_actions instead), admin_operators beyond SELECT, and
 -- accounts beyond SELECT (status changes are the tenant app's job).

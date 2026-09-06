@@ -2,8 +2,9 @@
 #
 # frozen_string_literal: true
 
-# The mutating verbs: every happy path with its row counts, the three
-# refusals (unknown account, own account, no second factor), a blank reason
+# The mutating verbs: every happy path with its row counts, the four
+# refusals (unknown account, own account, a fellow operator, no second
+# factor) and the admin_actions row each refusal leaves behind, a blank reason
 # refused before any write, the admin_actions row each verb leaves behind,
 # the guarantee that a recovery code never reaches metadata, and a failing
 # insert rolling the audit row back with the mutation.
@@ -46,6 +47,7 @@ def seed_sessions(db, now, id)
   db[:account_active_session_keys].insert(account_id: id, session_id: 's1', created_at: now, last_use: now)
   db[:account_active_session_keys].insert(account_id: id, session_id: 's2', created_at: now, last_use: now)
   db[:account_jwt_refresh_keys].insert(account_id: id, key: 'rk', deadline: now + 3600)
+  db[:account_remember_keys].insert(id: id, key: 'rm', deadline: now + (14 * 86_400))
   db[:account_identities].insert(account_id: id, provider: 'google', issuer: '', uid: "g-#{id}")
 end
 
@@ -125,7 +127,31 @@ begin
 rescue V::SelfTarget => e
   [e.class, @db[:account_otp_keys].where(id: id).count, @db[:admin_actions].count - before]
 end
-#=> [RodauthAdmin::Verbs::SelfTarget, 1, 0]
+#=> [RodauthAdmin::Verbs::SelfTarget, 1, 1]
+
+## A refused self-target is recorded as disable_mfa_refused, with the reason
+row = last_action(@db)
+[row[:action], row[:reason], JSON.parse(row[:metadata])['refusal'], row[:target_account_id] == id]
+#=> ['disable_mfa_refused', 'mine', 'self_target', true]
+
+## disable_mfa is refused on ANOTHER operator's account, and recorded
+@op_id = seed(@db, @now)
+@db[:admin_operators].insert(account_id: @op_id, email: 'colleague@example.com', added_by: 'try',
+                             created_at: Sequel::CURRENT_TIMESTAMP)
+before = @db[:admin_actions].count
+begin
+  V.disable_mfa(id: @op_id, actor: @actor, reason: 'they asked nicely', db: @db)
+rescue V::OperatorTarget => e
+  row = last_action(@db)
+  [e.class, @db[:account_otp_keys].where(id: @op_id).count, @db[:admin_actions].count - before,
+   row[:action], JSON.parse(row[:metadata])['refusal'], row[:target_account_id]]
+end
+#=> [RodauthAdmin::Verbs::OperatorTarget, 1, 1, 'disable_mfa_refused', 'operator_target', @op_id]
+
+## A verb that is not in SELF_REFUSED is fine on an operator's account
+r = V.clear_lockout(id: @op_id, actor: @actor, reason: 'colleague locked out', db: @db)
+[r.counts, last_action(@db)[:action]]
+#=> [{ account_lockouts: 1, account_login_failures: 1 }, 'clear_lockout']
 
 ## regenerate_recovery_codes returns the tenant's limit of fresh codes
 id = seed(@db, @now)
@@ -154,9 +180,11 @@ before = @db[:admin_actions].count
 begin
   V.regenerate_recovery_codes(id: id, actor: @actor, reason: 'why not', db: @db)
 rescue V::NoSecondFactor => e
-  [e.class, @db[:account_recovery_codes].where(id: id).count, @db[:admin_actions].count - before]
+  row = last_action(@db)
+  [e.class, @db[:account_recovery_codes].where(id: id).count, @db[:admin_actions].count - before,
+   row[:action], JSON.parse(row[:metadata])['refusal']]
 end
-#=> [RodauthAdmin::Verbs::NoSecondFactor, 0, 0]
+#=> [RodauthAdmin::Verbs::NoSecondFactor, 0, 1, 'regenerate_recovery_codes_refused', 'no_second_factor']
 
 ## A WebAuthn key alone is a second factor
 id = seed(@db, @now, mfa: false)
@@ -170,15 +198,22 @@ begin
   V.regenerate_recovery_codes(id: id, actor: V::Actor.build(email: 'op@example.com', account_id: id),
                               reason: 'mine', db: @db)
 rescue V::SelfTarget => e
-  [e.class, @db[:account_recovery_codes].where(id: id).select_map(:code)]
+  [e.class, @db[:account_recovery_codes].where(id: id).select_map(:code), last_action(@db)[:action]]
 end
-#=> [RodauthAdmin::Verbs::SelfTarget, ['old-1']]
+#=> [RodauthAdmin::Verbs::SelfTarget, ['old-1'], 'regenerate_recovery_codes_refused']
 
-## revoke_sessions deletes every active session row
+## revoke_sessions deletes every active session row AND the remember-me token
 id = seed(@db, @now)
 r = V.revoke_sessions(id: id, actor: @actor, reason: 'stolen laptop', db: @db)
-[r.counts, @db[:account_active_session_keys].where(account_id: id).count]
-#=> [{ account_active_session_keys: 2 }, 0]
+[r.counts, @db[:account_active_session_keys].where(account_id: id).count,
+ @db[:account_remember_keys].where(id: id).count]
+#=> [{ account_active_session_keys: 2, account_remember_keys: 1 }, 0, 0]
+
+## revoke_sessions on an account with no remember cookie still runs and records zeroes
+id = @db[:accounts].insert(email: "norm#{SecureRandom.hex(4)}@example.com", status_id: 2)
+r = V.revoke_sessions(id: id, actor: @actor, reason: 'nothing there', db: @db)
+[r.counts, r.total]
+#=> [{ account_active_session_keys: 0, account_remember_keys: 0 }, 0]
 
 ## revoke_refresh_keys deletes every refresh token
 id = seed(@db, @now)
@@ -268,8 +303,12 @@ end
 #=> [true, true, @pid, 1, 1]
 
 ## preview counts what each verb would touch
-[@preview.counts[:clear_lockout], @preview.counts[:revoke_sessions]]
-#=> [{ account_lockouts: 1, account_login_failures: 1, login_failure_number: 4 }, { account_active_session_keys: 2 }]
+@preview.counts[:clear_lockout]
+#=> { account_lockouts: 1, account_login_failures: 1, login_failure_number: 4 }
+
+## preview counts the remember-me token beside the session keys
+@preview.counts[:revoke_sessions]
+#=> { account_active_session_keys: 2, account_remember_keys: 1 }
 
 ## preview reports the MFA inventory and whether a second factor exists at all
 [@preview.counts[:disable_mfa][:account_webauthn_keys], @preview.counts[:disable_mfa][:account_webauthn_user_ids],
@@ -300,8 +339,19 @@ p = V.preview(id: 1, db: BrokenDb.new)
  V::SLUGS.keys.first, V::SLUGS.keys.last]
 #=> [7, true, 'clear-lockout', 'revoke-refresh-keys']
 
-## Results are frozen
+## Results are frozen, including the one carrying the codes
 id = seed(@db, @now)
 r = V.revoke_sessions(id: id, actor: @actor, reason: 'freeze', db: @db)
-[r.frozen?, r.counts.frozen?, r.target.is_a?(String)]
-#=> [true, true, true]
+g = V.regenerate_recovery_codes(id: seed(@db, @now), actor: @actor, reason: 'freeze', db: @db)
+[r.frozen?, r.counts.frozen?, r.target.is_a?(String), g.frozen?, g.codes.frozen?, g.counts.frozen?]
+#=> [true, true, true, true, true, true]
+
+## unlink_identity coerces the identity id: an Array is NotFound, not `id IN (...)`
+id = seed(@db, @now)
+iid = @db[:account_identities].where(account_id: id).get(:id)
+begin
+  V.unlink_identity(id: id, identity_id: [iid], actor: @actor, reason: 'array', db: @db)
+rescue V::NotFound => e
+  [e.class, @db[:account_identities].where(id: iid).count]
+end
+#=> [RodauthAdmin::Verbs::NotFound, 1]

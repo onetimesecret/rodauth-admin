@@ -168,6 +168,13 @@ module RodauthAdmin
         # enrolled would be bounced straight back to /otp-auth by the first
         # verb page they open.
         mark_mfa_fresh!
+        # And drop any return path a step-up left behind. An operator whose
+        # stale confirm page sent them to /otp-auth can end up at /otp-setup
+        # instead (no key yet, or a re-enrolment); Rodauth clears this key
+        # only in its own otp-auth response, so without this the NEXT
+        # otp-auth would silently redirect them to a confirm page they asked
+        # for some time ago rather than to where they were going.
+        remove_session_value(two_factor_auth_redirect_session_key)
         RodauthAdmin::Audit.record(
           action: 'otp_setup', actor: account[:email], actor_account_id: account_id,
           ip: request.ip, user_agent: request.user_agent

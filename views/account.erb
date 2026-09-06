@@ -14,9 +14,11 @@
 %>
 <% if @detail.available %>
   <% a = @detail.account %>
-  <%# The two verbs refused on the operator's own account (Verbs::SELF_REFUSED)
-      are not shown here at all: a button that always answers 403 is noise. %>
-  <% own_account = rodauth.session_value == a.id %>
+  <%# The two verbs refused on any operator's account (Verbs::SELF_REFUSED,
+      raised as SelfTarget or OperatorTarget) are not shown here at all: a
+      button that always answers 403 is noise. The verb layer re-checks both
+      inside its own transaction; this only decides what to render. %>
+  <% operator_target = rodauth.session_value == a.id || operator_account?(a.id) %>
   <h2>Account <code><%= a.id %></code></h2>
 
   <h3>Identity &amp; status</h3>
@@ -104,7 +106,7 @@
     </table>
   <% end %>
   <p class="footnote">Public keys are never selected or shown.</p>
-  <% unless own_account %>
+  <% unless operator_target %>
     <p class="actions">
       <a href="<%= verb_path(a.id, 'disable-mfa') %>">Disable MFA</a>
       <% if mfa.otp.present || !mfa.webauthn_keys.empty? %>

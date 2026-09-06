@@ -64,6 +64,14 @@ RSpec.describe RodauthAdmin::App do
       expect(last_response.body).to include('jwt_refresh')
     end
 
+    it 'does not list the failure counter as a table it would empty' do
+      stock_target!
+      get verb_path(target, 'clear-lockout')
+      expect(last_response.body).to include('<code>account_login_failures</code>')
+      expect(last_response.body).not_to include('<code>login_failure_number</code>')
+      expect(last_response.body).to include('counter currently stands at 4')
+    end
+
     it 'says so when there is nothing to remove, and still offers the button' do
       get verb_path(target, 'clear-lockout')
       expect(last_response.body).to include('nothing to remove')
@@ -156,14 +164,96 @@ RSpec.describe RodauthAdmin::App do
     end
   end
 
+  # COPY is the operator-facing prose for every verb, and the dispatch reads
+  # the slug straight out of it. A verb added to one and not the other is a
+  # page with no words or words with no page, both of which only show up on
+  # the request itself.
+  describe 'the verb table' do
+    it 'has copy for exactly the verbs that exist' do
+      expect(RodauthAdmin::VerbRoutes::COPY.keys)
+        .to eq(RodauthAdmin::Verbs::SLUGS.keys + [RodauthAdmin::VerbRoutes::UNLINK_SLUG])
+    end
+  end
+
+  describe 'disabling MFA' do
+    it 'removes every second factor, records it, and flashes the counts' do
+      stock_target!
+      authdb[:account_otp_unlocks].insert(id: target, num_successes: 1)
+      run_verb!(target, 'disable-mfa')
+      expect(last_response).to be_redirect
+
+      expect(authdb[:account_otp_keys].where(id: target).count).to eq(0)
+      expect(authdb[:account_otp_unlocks].where(id: target).count).to eq(0)
+      expect(authdb[:account_recovery_codes].where(id: target).count).to eq(0)
+
+      row = actions('disable_mfa').last
+      expect(row[:target_account_id]).to eq(target)
+      expect(row[:reason]).to include('4412')
+
+      get "/accounts/#{target}"
+      expect(last_response.body).to include('account_otp_keys 1')
+    end
+  end
+
+  # The half of the verb that bites today: the tenant app does not consult
+  # account_active_session_keys, but it does honour a remember-me cookie.
+  describe 'revoking sessions' do
+    it 'deletes the remember-me token as well as the session keys' do
+      stock_target!
+      authdb[:account_remember_keys].insert(id: target, key: 'rm', deadline: now + (14 * 86_400))
+      run_verb!(target, 'revoke-sessions')
+      expect(authdb[:account_remember_keys].where(id: target).count).to eq(0)
+      expect(authdb[:account_active_session_keys].where(account_id: target).count).to eq(0)
+    end
+
+    it 'says on the confirm page that an open browser session is not ended' do
+      get verb_path(target, 'revoke-sessions')
+      expect(last_response.body).to include('check_active_session')
+      expect(last_response.body).to include('remember-me')
+    end
+  end
+
+  describe 'the operator-target refusal' do
+    # A second operator with a second factor of their own. A method rather
+    # than a `let` so the group stays under the memoized-helper limit; it is
+    # called once per example either way.
+    def colleague!
+      id = create_account(email: 'colleague@example.com', password: password)
+      allowlist!(id, 'colleague@example.com')
+      authdb[:account_otp_keys].insert(id: id, key: 'otp', num_failures: 0)
+      id
+    end
+
+    it 'refuses disable-mfa on a fellow operator with a 403 and records the attempt' do
+      colleague = colleague!
+      run_verb!(colleague, 'disable-mfa')
+      expect(last_response.status).to eq(403)
+      expect(last_response.body).to include('another operator')
+      expect(authdb[:account_otp_keys].where(id: colleague).count).to eq(1)
+
+      row = actions('disable_mfa_refused').last
+      expect(row[:target_account_id]).to eq(colleague)
+      expect(row[:metadata].to_s).to include('operator_target')
+    end
+
+    it 'hides both refused verbs on a fellow operator\'s account page' do
+      get "/accounts/#{colleague!}"
+      expect(last_response.body).not_to include('disable-mfa')
+      expect(last_response.body).not_to include('regenerate-recovery-codes')
+      expect(last_response.body).to include('clear-lockout'), 'the other verbs stay'
+    end
+  end
+
   describe 'the self-target refusal' do
     it 'refuses disable-mfa on the operator\'s own account with a 403' do
-      before = actions.size
       run_verb!(account_id, 'disable-mfa')
       expect(last_response.status).to eq(403)
       expect(last_response.body).to include('your own account')
       expect(authdb[:account_otp_keys].where(id: account_id).count).to eq(1)
-      expect(actions.size).to eq(before)
+
+      row = actions('disable_mfa_refused').last
+      expect(row[:target_account_id]).to eq(account_id)
+      expect(row[:metadata].to_s).to include('self_target')
     end
 
     it 'hides both refused verbs on the operator\'s own account page' do

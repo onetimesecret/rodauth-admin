@@ -48,24 +48,37 @@ Secrets stay out of the trail. Regenerated recovery codes are returned for a
 single render and never written to metadata; an identity's `uid` is not
 recorded either (for most providers it is the customer's email address).
 
-## The self-target rule
+## The operator-target rule
 
 `disable_mfa` and `regenerate_recovery_codes` are refused on the operator's
-own account (`Verbs::SELF_REFUSED` → `Verbs::SelfTarget`, HTTP 403). An
-admin tool that can strip its own operator's second factor is a
-privilege-escalation path with a reason field attached. Operators change
-their own MFA in the tenant app. Both buttons are hidden on the operator's
-own account page rather than shown and refused.
+own account (`Verbs::SELF_REFUSED` → `Verbs::SelfTarget`, HTTP 403) **and on
+any other operator's account** (`Verbs::OperatorTarget`, HTTP 403, decided by
+an `admin_operators` row read inside the verb's own transaction). An admin
+tool that can strip an operator's second factor is a privilege-escalation
+path with a reason field attached, and refusing only *self* leaves two
+operators one social-engineering call apart. Operators change their own MFA
+in the tenant app, or they are offboarded from the allowlist. Both buttons
+are hidden on any operator's account page rather than shown and refused.
 
 `regenerate_recovery_codes` is also refused when the account has no TOTP and
 no WebAuthn key (`Verbs::NoSecondFactor`, HTTP 422): recovery codes without a
 second factor are a password-only login path that looks like MFA.
 
-## Two tenant-side dependencies
+All three refusals are recorded, as `<verb>_refused` in `admin_actions` with
+`metadata.refusal` naming which one and the operator's own reason attached
+(`Audit::REFUSAL_SUFFIX` exempts them from the reason requirement the way
+`SESSION_ACTIONS` does, so a refusal can always be written down). The row is
+written after the verb's transaction has rolled back, on the same connection,
+so nothing about the refused mutation survives but the fact that it was
+tried. `Audit::BlankReason` is deliberately not recorded: an empty textarea
+is a form error, not an attempt on an account.
 
-Both were verified against the tenant app on 2026-09-05 and are stated
+## Three tenant-side dependencies
+
+All three were verified against the tenant app on 2026-09-05 and are stated
 plainly on the confirm pages, because "this did less than you thought" is
-worse discovered afterwards.
+worse discovered afterwards. They are facts about the tenant app, recorded
+here; nothing in this tool calls it (CHARTER: no cross-service call in v1).
 
 - **`force-password-reset`** — the tenant app does not currently enable
   Rodauth's `password_expiration` feature. The verb invalidates outstanding
@@ -73,6 +86,17 @@ worse discovered afterwards.
   a new password at login once the tenant enables that feature.
 - **`revoke-refresh-keys`** — the tenant app does not enable `jwt_refresh`,
   so this verb normally finds nothing.
+- **`revoke-sessions`** — the tenant app never calls Rodauth's
+  `check_active_session`: only its own documentation mentions it, and its
+  session gate reads its Redis session blob instead. Deleting
+  `account_active_session_keys` therefore does not end a live browser session
+  today; the rows are cleared anyway, because they are the state the tenant
+  will consult the day it enforces that call, and a half-cleared session
+  table would be worse than none. The tenant *does* enable `remember`, whose
+  cookie carries a 14-day deadline, so the verb also deletes
+  `account_remember_keys` — that half is effective immediately, and without
+  it an attacker holding a remember cookie walked back in after every
+  revoke. The confirm page says exactly this.
 
 ## The verbs
 
@@ -83,7 +107,7 @@ worse discovered afterwards.
 | `expire-tokens` | password-reset, verification, login-change and email-auth keys |
 | `disable-mfa` | OTP key, OTP unlock, recovery codes, WebAuthn keys and user ids |
 | `regenerate-recovery-codes` | `account_recovery_codes` (replaced wholesale) |
-| `revoke-sessions` | `account_active_session_keys` |
+| `revoke-sessions` | `account_active_session_keys`, `account_remember_keys` |
 | `revoke-refresh-keys` | `account_jwt_refresh_keys` |
 | `unlink-identity` (nested: `/accounts/:id/identities/:identity_id/unlink`) | one `account_identities` row |
 
