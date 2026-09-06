@@ -213,11 +213,17 @@ module RodauthAdmin
     end
 
     # The one-time codes page. No redirect: a redirect would put the codes
-    # in a flash, and a flash is a cookie.
+    # in a flash, and a flash is a cookie. And no caching: the codes must not
+    # survive in a back/forward cache or a proxy either, so this one response
+    # carries no-store (Pragma and Expires for the caches that predate it).
+    # Only here — the read screens hold nothing a cache should not.
     def show_codes(_req, id, result)
       @account_id = id
       @codes = result.codes
       @target = result.target
+      response['cache-control'] = 'no-store'
+      response['pragma'] = 'no-cache'
+      response['expires'] = '0'
       view 'verb_codes'
     end
 

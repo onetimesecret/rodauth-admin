@@ -294,6 +294,15 @@ RSpec.describe RodauthAdmin::App do
       expect(last_response.body).to include('no TOTP or WebAuthn key')
       expect(authdb[:account_recovery_codes].where(id: target).select_map(:code)).to eq(['old-1'])
     end
+
+    it 'tells caches not to keep the codes page' do
+      stock_target!
+      run_verb!(target, 'regenerate-recovery-codes')
+      expect(last_response.status).to eq(200)
+      expect(last_response.headers['cache-control']).to eq('no-store')
+      expect(last_response.headers['pragma']).to eq('no-cache')
+      expect(last_response.headers['expires']).to eq('0')
+    end
   end
 
   describe 'unlinking an SSO identity' do
