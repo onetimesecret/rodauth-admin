@@ -60,6 +60,17 @@ operators one social-engineering call apart. Operators change their own MFA
 in the tenant app, or they are offboarded from the allowlist. Both buttons
 are hidden on any operator's account page rather than shown and refused.
 
+The boundary is exact: `SELF_REFUSED` holds the two verbs that remove or
+replace a second factor, and no others. `clear_lockout`, `force_password_reset`,
+`expire_tokens`, `revoke_sessions`, `revoke_refresh_keys` and `unlink_identity`
+stay available on an operator's account, because none of them weakens the
+admin door: clearing a lockout, expiring emailed links, revoking sessions or
+refresh keys, or unlinking an SSO identity cannot get anyone past password +
+TOTP, and the worst each can do to an operator is a nuisance the operator
+will notice. That is the line the next verb is argued against: one that
+removes or replaces a credential or a factor joins `SELF_REFUSED`, and one
+that does not is a support action like the six.
+
 `regenerate_recovery_codes` is also refused when the account has no TOTP and
 no WebAuthn key (`Verbs::NoSecondFactor`, HTTP 422): recovery codes without a
 second factor are a password-only login path that looks like MFA.
