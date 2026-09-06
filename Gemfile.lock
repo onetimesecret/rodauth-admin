@@ -8,6 +8,9 @@ GEM
     base64 (0.3.0)
     bcrypt (3.1.22)
     bigdecimal (4.1.2)
+    bundler-audit (0.9.3)
+      bundler (>= 1.2.0)
+      thor (~> 1.0)
     chunky_png (1.4.0)
     concurrent-ruby (1.3.8)
     debug (1.11.1)
@@ -155,6 +158,7 @@ GEM
       concurrent-ruby (~> 1.0)
     sequel (5.108.0)
       bigdecimal
+    simplecov (1.2.0)
     sqlite3 (2.9.6-aarch64-linux-gnu)
     sqlite3 (2.9.6-aarch64-linux-musl)
     sqlite3 (2.9.6-arm-linux-gnu)
@@ -165,6 +169,7 @@ GEM
     sqlite3 (2.9.6-x86_64-darwin)
     sqlite3 (2.9.6-x86_64-linux-gnu)
     sqlite3 (2.9.6-x86_64-linux-musl)
+    thor (1.5.0)
     tilt (2.9.0)
     timecop (0.9.11)
     tryouts (4.0.0.pre1)
@@ -202,6 +207,7 @@ DEPENDENCIES
   argon2 (~> 2.3)
   base64
   bcrypt (~> 3.1)
+  bundler-audit
   debug
   erubi (~> 1.13)
   logger
@@ -229,6 +235,7 @@ DEPENDENCIES
   rubocop-thread_safety
   semantic_logger (~> 4.17)
   sequel (~> 5.0)
+  simplecov
   sqlite3 (~> 2.0)
   tilt (~> 2.4)
   timecop (~> 0.9)
@@ -240,6 +247,7 @@ CHECKSUMS
   base64 (0.3.0) sha256=27337aeabad6ffae05c265c450490628ef3ebd4b67be58257393227588f5a97b
   bcrypt (3.1.22) sha256=1f0072e88c2d705d94aff7f2c5cb02eb3f1ec4b8368671e19112527489f29032
   bigdecimal (4.1.2) sha256=53d217666027eab4280346fba98e7d5b66baaae1b9c3c1c0ffe89d48188a3fbd
+  bundler-audit (0.9.3) sha256=81c8766c71e47d0d28a0f98c7eed028539f21a6ea3cd8f685eb6f42333c9b4e9
   chunky_png (1.4.0) sha256=89d5b31b55c0cf4da3cf89a2b4ebc3178d8abe8cbaf116a1dba95668502fdcfe
   concurrent-ruby (1.3.8) sha256=b2f1be836e968ccc78ccfce277ea79c72a88633f22306782c16ff23fb415d1e1
   debug (1.11.1) sha256=2e0b0ac6119f2207a6f8ac7d4a73ca8eb4e440f64da0a3136c30343146e952b6
@@ -315,6 +323,7 @@ CHECKSUMS
   ruby-progressbar (1.13.0) sha256=80fc9c47a9b640d6834e0dc7b3c94c9df37f08cb072b7761e4a71e22cff29b33
   semantic_logger (4.18.0) sha256=b00e4480b63d844628ce383e80d564626fe2fdb525ecf378dbc4df7828dead8b
   sequel (5.108.0) sha256=ae5996d1196775427916a2fa36e02f99762ead9affb8ea9b1aec2c0b16bdb3a3
+  simplecov (1.2.0) sha256=ea6acd05eece5a41990e2a5171c57d15700d329326c7666c85ee8c6a0dd0977e
   sqlite3 (2.9.6-aarch64-linux-gnu) sha256=d8b1f7d23efd7abac285775a9566562fc7debfef79d594e3a20354406fb7907c
   sqlite3 (2.9.6-aarch64-linux-musl) sha256=3579e1c98cdc7ff5c3722847bb63ed4e1efb7ff675cb5e1e48ef2d4da5fb3bc9
   sqlite3 (2.9.6-arm-linux-gnu) sha256=33541500e3615da02afe54a9cc38b17a6985d3cf9d8b76d6d0a83002f114e7ec
@@ -325,6 +334,7 @@ CHECKSUMS
   sqlite3 (2.9.6-x86_64-darwin) sha256=b5842fea77781c14da03fa7bc0feb82db03a69e135affcb6f5399cbd2797a5f3
   sqlite3 (2.9.6-x86_64-linux-gnu) sha256=613188ce02f614126ddbc38c5e217ccffd6306d0dcd9adca9764547aa890a634
   sqlite3 (2.9.6-x86_64-linux-musl) sha256=d493b11818a3573387a1d56e1ee8fa00da23a683a7a1cc063e7a0feeed843abf
+  thor (1.5.0) sha256=e3a9e55fe857e44859ce104a84675ab6e8cd59c650a49106a05f55f136425e73
   tilt (2.9.0) sha256=da5735d0280bba96e9a91041bb14aee435ccad5c17b0fa519249ae543d9aa3a5
   timecop (0.9.11) sha256=41284dc6e5041f2184f781ace766f942108c842f8d8c1386a26e6343decc7542
   tryouts (4.0.0.pre1) sha256=fd8e5ad4a73fbf6fccacf75b755e9194f4d88a8bd5a9d487b2e4e9dad8e22969

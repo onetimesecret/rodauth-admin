@@ -12,6 +12,31 @@ name: CI
 #                  privilege boundary and the append-only trigger are proven
 #                  together rather than assumed (docs/design/database-credentials.md).
 #                  spec/grants_spec.rb is the part that only runs here.
+#
+# Plus two standing checks:
+#
+#   hygiene        runs the pre-commit hooks over every file. This is what
+#                  guarantees the local hooks and CI cannot disagree for every
+#                  file-scoped hook: a hook that only ever runs on a
+#                  developer's machine is one `--no-verify` away from not
+#                  existing. The one hook it CANNOT re-run this way is
+#                  gitleaks (see `secrets` below), so it is skipped there.
+#   secrets        gitleaks over the full history. The upstream pre-commit
+#                  hook runs `gitleaks git --pre-commit --staged`, i.e. it
+#                  scans the staged diff; under `pre-commit run --all-files`
+#                  CI has staged nothing and the hook scans nothing at all.
+#                  So secrets get their own job with a pinned gitleaks binary.
+#   audit          bundler-audit against the current advisory database.
+#
+# Every Ruby-level check is invoked through bin/ci, the single entry point the
+# local pre-push hook also uses; the two that are not (hygiene, secrets) run a
+# tool the developer also has locally through pre-commit. Nothing in this file
+# spells out a command line that a developer cannot reproduce.
+#
+# Every `uses:` is pinned to a full commit SHA with the tag in a trailing
+# comment (same style as claude.yml): a tag is mutable, a SHA is not, and this
+# repo holds admin credentials. Dependabot's github-actions ecosystem keeps the
+# SHAs current (.github/dependabot.yml).
 
 on:
   push:
@@ -19,6 +44,12 @@ on:
   pull_request:
     branches: [main, develop, 'feature/*', 'fix/*', 'rel/*']
   workflow_dispatch:
+  # Weekly, so a newly published advisory against a gem we already ship
+  # surfaces without waiting for someone to open a PR. Only the audit job runs
+  # on this trigger (see the `if:` on every other job): re-running the test
+  # matrix against an unchanged tree buys nothing.
+  schedule:
+    - cron: '0 6 * * 1' # Mondays, 06:00 UTC
 
 permissions:
   contents: read
@@ -29,30 +60,55 @@ concurrency:
 
 jobs:
   lint:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
           bundler-cache: true
-      - run: bundle exec rubocop --parallel
+      - name: RuboCop
+        run: bin/ci lint
 
   test:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       RACK_ENV: test
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
           bundler-cache: true
+
       - name: Tryouts
-        run: bundle exec try --agent try/
+        run: bin/ci try
+
+      # Tee'd so the coverage line can be lifted out below without running the
+      # suite twice. pipefail keeps the step's exit status from the pipe head.
       - name: RSpec
-        run: bundle exec rspec --format progress
+        run: |
+          set -o pipefail
+          bin/ci rspec | tee "${RUNNER_TEMP}/rspec.log"
+
+      # SimpleCov prints one 'Coverage: NN.N% (a/b lines)' line. Surfacing it in
+      # the run summary makes a coverage regression visible on the PR page
+      # without anyone opening the log. always(), so a failing suite still
+      # reports whatever it managed to cover.
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f "${RUNNER_TEMP}/rspec.log" ]; then
+            grep -E '^Coverage: ' "${RUNNER_TEMP}/rspec.log" >> "${GITHUB_STEP_SUMMARY}" || \
+              echo 'No coverage line in the RSpec output.' >> "${GITHUB_STEP_SUMMARY}"
+          fi
 
   test-postgres:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         # Production is PostgreSQL; 16 is the floor the admin_actions trigger
@@ -87,8 +143,8 @@ jobs:
       # the only credential that ever runs DDL.
       ADMIN_DATABASE_URL_MIGRATIONS: postgresql://postgres:ci_superuser@localhost:5432/onetime_authdb_ci
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
           bundler-cache: true
 
@@ -119,12 +175,109 @@ jobs:
 
       # Tryouts build their own in-process Sequel.sqlite databases and are
       # unaffected by the URLs above; they run here to keep the lane a full
-      # `rake test` rather than a subset.
+      # suite rather than a subset. bin/ci sets RACK_ENV and otherwise leaves
+      # ENV alone, so the pre-set ADMIN_DATABASE_URL* above survive.
       - name: Tryouts
-        run: bundle exec try --agent try/
+        run: bin/ci try
 
       # spec_helper honours the pre-set ADMIN_DATABASE_URL and skips the build
       # steps; the suite runs as rodauth_admin_app with the real grants, and
       # spec/grants_spec.rb asserts the boundary itself.
       - name: RSpec
-        run: bundle exec rspec --format progress
+        run: bin/ci rspec
+
+  # The hooks, run in CI over the whole tree. Anything a developer can bypass
+  # with `git commit --no-verify` is caught here instead.
+  hygiene:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # no-commit-to-branch would fail every push-to-main run by design; it is
+      # a local guard rail, not a CI check. rubocop is skipped because the lint
+      # job above already runs it over the whole tree via bin/ci lint, in
+      # parallel, and reports failures under a name that says 'lint'.
+      # gitleaks is skipped here because it would be a no-op: its entry is
+      # `gitleaks git --pre-commit --staged` and nothing is staged in CI. The
+      # `secrets` job scans the history instead.
+      SKIP: no-commit-to-branch,rubocop,gitleaks
+      PRE_COMMIT_VERSION: 4.6.0
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # Still needed despite SKIP=rubocop: pre-commit resolves `language: system`
+      # hook entries eagerly, and keeping the bundle available means dropping the
+      # SKIP is a one-line change rather than a job rewrite.
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          bundler-cache: true
+
+      # Go is preinstalled on ubuntu-latest; actionlint and gitleaks are
+      # `language: golang` hooks and build from it.
+      - name: Install pre-commit
+        run: pipx install "pre-commit==${PRE_COMMIT_VERSION}"
+
+      # The hook environments (Go builds for actionlint and gitleaks) are the
+      # expensive part; they change only when this config's revs change.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ env.PRE_COMMIT_VERSION }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: pre-commit (all files)
+        run: pre-commit run --all-files --show-diff-on-failure --color=always --hook-stage pre-commit
+
+  # Secret detection, over the whole history rather than a diff.
+  #
+  # `gitleaks git` (the default mode) walks `git log -p`, so a credential that
+  # was committed and later removed is still found — which is the case that
+  # matters, because a pushed secret is a burned secret whether or not HEAD
+  # still contains it. That needs the full history, hence fetch-depth: 0; the
+  # repo is small enough for this to stay well under a minute. `gitleaks dir`
+  # would only see the working tree and would miss exactly the commits a
+  # `--no-verify` push is likely to contain.
+  #
+  # The binary is a pinned release, not the pre-commit hook, because the hook
+  # cannot scan history. Keep GITLEAKS_VERSION equal to the `rev:` of the
+  # gitleaks repo in .pre-commit-config.yaml so local and CI agree on rules;
+  # GITLEAKS_SHA256 is from gitleaks_<version>_checksums.txt on that release.
+  secrets:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -o "${RUNNER_TEMP}/${tarball}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}" gitleaks
+          install -m 0755 "${RUNNER_TEMP}/gitleaks" /usr/local/bin/gitleaks
+          gitleaks version
+
+      # --redact so a finding does not print the secret into a public log.
+      - name: gitleaks (full history)
+        run: gitleaks git --redact --no-banner .
+
+  # Dependency advisories. Separate from lint because it needs the network and
+  # can go red without anyone changing a line of code; that is exactly why it
+  # also runs on the weekly schedule.
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          bundler-cache: true
+      - name: bundler-audit
+        run: bin/ci audit

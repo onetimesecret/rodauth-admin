@@ -50,17 +50,27 @@ module ScratchGuard
     url.to_s.delete_prefix('sqlite://').start_with?("#{scratch_dir}/")
   end
 
+  # @param env [Hash] ENV or a stand-in. Passed in rather than read here so
+  #   the override is as testable as the rest of the rule, and so a caller
+  #   cannot disable the guard by accident from a stale shell export it never
+  #   looked at — spec_helper is the one place that hands it the real ENV, and
+  #   it prints a banner when it does.
   # @return [String, nil] nil when the target is acceptable, else the
   #   offending database name (possibly '') for the refusal message.
-  def violation(url, scratch_dir: nil)
-    return nil if ENV[DESTRUCTIVE_OVERRIDE] == '1'
+  def violation(url, scratch_dir: nil, env: ENV)
+    return nil if override?(env)
     return nil if own_scratch_file?(url, scratch_dir)
 
     name = database_name(url)
     name.match?(SCRATCH_DATABASE_NAME) ? nil : name
   end
 
-  # @param env [Hash] ENV or a stand-in
+  # True when the operator has explicitly declared the target disposable.
+  def override?(env)
+    env[DESTRUCTIVE_OVERRIDE] == '1'
+  end
+
+  # @param env [Hash] ENV or a stand-in; also the source of the override
   # @return [Array<Array(String, String)>] [variable, offending name] pairs,
   #   in CHECKED_URL_VARS order, for every set URL that fails the rule.
   def offenders(env, scratch_dir: nil)
@@ -68,7 +78,7 @@ module ScratchGuard
       url = env[var].to_s
       next if url.strip.empty?
 
-      name = violation(url, scratch_dir: scratch_dir)
+      name = violation(url, scratch_dir: scratch_dir, env: env)
       [var, name] if name
     end
   end
@@ -85,8 +95,13 @@ module ScratchGuard
       through ADMIN_DATABASE_URL_MIGRATIONS.
 
       Name the database so it says so (matching #{SCRATCH_DATABASE_NAME.source},
-      e.g. onetime_authdb_ci), or set #{DESTRUCTIVE_OVERRIDE}=1 if you have
-      genuinely decided this database is disposable.
+      e.g. onetime_authdb_ci). If you have genuinely decided this database
+      is disposable, say so on the command line of the run itself:
+
+        #{DESTRUCTIVE_OVERRIDE}=1 bundle exec rspec
+
+      It is deliberately not something bin/ci or a .env file can turn on for
+      you — bin/ci strips it from the environment it hands the suite.
     REFUSAL
   end
 end

@@ -1,0 +1,119 @@
+##
+# Pre-commit hook configuration
+#
+# Install (once per clone):
+#
+#   bin/setup
+#
+# which runs, and which you can also run by hand:
+#
+#   pre-commit install --install-hooks --hook-type pre-commit --hook-type pre-push
+#
+# One entry point
+# ---------------
+# Every check this repo runs lives behind `bin/ci`. The pre-push hook below
+# calls `bin/ci` (lint, try, rspec) and the GitHub Actions lanes call the same
+# `bin/ci <stage>`; there is no second copy of the command line to drift. The
+# hooks in this file that are NOT bin/ci (whitespace, secrets, actionlint) are
+# re-run in CI by the `hygiene` job over `pre-commit run --all-files`, so the
+# hooks and CI cannot disagree about what passes.
+#
+# Split of responsibilities:
+#   pre-commit stage  cheap, file-scoped, autocorrecting: whitespace, YAML,
+#                     private keys, large files, rubocop on staged Ruby,
+#                     actionlint on workflows, gitleaks on the staged diff.
+#   pre-push stage    the real suite: `bin/ci` = lint + try + rspec.
+#
+# On demand:
+#   pre-commit run --all-files                     # every pre-commit hook
+#   pre-commit run rubocop --all-files             # one hook
+#   pre-commit run --hook-stage pre-push           # the bin/ci hook
+#   pre-commit autoupdate                          # bump the pinned revs
+#
+# Docs: https://pre-commit.com
+
+default_install_hook_types:
+  - pre-commit
+  - pre-push
+
+default_stages: [pre-commit]
+
+# 'system' so the hook uses the rbenv/chruby Ruby already on PATH (3.4.10)
+# and the bundle in this project, rather than a pre-commit-managed gem env
+# that would drift from Gemfile.lock.
+default_language_version:
+  ruby: system
+
+# Stop at the first failing hook: same contract as bin/ci, which stops at the
+# first failing stage.
+fail_fast: true
+
+repos:
+  # Standard hygiene. Cheap, universal, and the only hooks here that write to
+  # files other than through rubocop.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-yaml
+      - id: no-commit-to-branch
+        args: ['--branch', 'main']
+
+  # RuboCop over staged Ruby.
+  #
+  # `bundle exec` so the version comes from Gemfile.lock and the hook is exactly
+  # what `bin/ci lint` and the CI lint job run. No --fail-level: this repo runs
+  # RuboCop strict and is clean, so the hook fails on anything CI would fail on.
+  # Deliberately no `--server`: it saves a couple of seconds on a tree this
+  # size and costs a stale daemon still holding the previous plugin gems after
+  # a Gemfile.lock bump, linting against rules that are no longer the rules.
+  # `--autocorrect` applies safe fixes; when it rewrites a staged file
+  # pre-commit fails the commit so you review and re-stage.
+  # `--force-exclusion` honours AllCops/Exclude even for explicitly passed paths
+  # (this matters for db/migrate/**).
+  #
+  # `types: [ruby]` is enough to cover Gemfile, Rakefile and config.ru: identify
+  # tags all three as ruby by filename, no extra `files:` regex needed.
+  - repo: local
+    hooks:
+      - id: rubocop
+        name: RuboCop (staged files)
+        description: Ruby static analysis and safe autocorrect
+        entry: bundle exec rubocop --config .rubocop.yml --force-exclusion --autocorrect
+        language: system
+        types: [ruby]
+
+  # GitHub Actions workflow linting. Catches bad expressions, unknown contexts,
+  # shellcheck findings inside `run:` blocks, and typo'd `uses:` refs before they
+  # cost a push. Built from source, so it needs Go on PATH locally (bin/setup
+  # warns when it is missing); ubuntu-latest runners have Go preinstalled.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+
+  # Secret detection on the staged diff. This repo is the tool that holds the
+  # keys: a leaked credential here is not a style problem. Also Go-built.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  # The suite, on push only. Single entry point: identical to what CI runs, so a
+  # green push is a green CI run modulo the PostgreSQL lane (which needs a
+  # server) and the audit stage (which needs the network).
+  - repo: local
+    hooks:
+      - id: ci-lint-try-rspec
+        name: bin/ci (lint, try, rspec)
+        description: Full local check suite before pushing
+        entry: bin/ci
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true

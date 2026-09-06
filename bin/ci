@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+#
+# bin/ci — the single definition of "the checks".
+#
+# Used by the git hooks, by GitHub Actions and by `rake test`, so that all
+# three run exactly the same commands. Stages are independent; each one is a
+# single command and its exit status is the stage's result, propagated as
+# bin/ci's own exit status (2 is reserved for usage errors).
+#
+#   bin/ci                 lint, try, rspec (in that order, stop at first failure)
+#   bin/ci <stage>...      only the named stages, in the order given
+#
+# Adding a stage touches exactly two places: STAGES and stage_command().
+# `audit` needs the network (it refreshes the advisory database), so it is not
+# in DEFAULT_STAGES; CI runs it as its own job. RACK_ENV=test is set for try
+# and rspec only; nothing else in the environment is touched, because the
+# PostgreSQL lane pre-sets the database URLs and RACK_ENV itself.
+#
+# One exception, and it is the same rule spec/support/spec_mode.rb applies:
+# a pre-set ADMIN_DATABASE_URL only counts as "a database was provisioned for
+# this run" when the caller also said RACK_ENV=test. Otherwise the URL is just
+# direnv's development URL leaking in from the shell, and it is unset for the
+# try and rspec stages so the suite builds its own scratch SQLite. Without
+# this, bin/ci setting RACK_ENV=test would turn every dev shell into a
+# "provisioned" run pointed at the developer's real authdb. The same branch
+# drops RODAUTH_ADMIN_ALLOW_DESTRUCTIVE_SPECS, so the scratch guard's escape
+# hatch cannot arrive from a stale shell export or a .env line — it works only
+# when set deliberately on the command line of a RACK_ENV=test invocation.
+
+set -euo pipefail
+
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# The stage list. Space-separated (bash 3.2 on macOS has no associative
+# arrays); used for validation and for usage, so it cannot drift from either.
+STAGES="lint audit try rspec"
+DEFAULT_STAGES="lint try rspec"
+
+# The ONLY place a stage's command line lives.
+stage_command() {
+  case "$1" in
+    lint)  bundle exec rubocop --parallel ;;
+    audit) bundle exec bundler-audit check --update ;;
+    try)   test_env bundle exec try --agent try/ ;;
+    rspec) test_env bundle exec rspec ;;
+    *)     printf 'bin/ci: unknown stage %s\n\n' "$1" >&2; usage ;;
+  esac
+}
+
+usage() {
+  {
+    echo 'usage: bin/ci [stage...]'
+    echo
+    echo "  stages:   ${STAGES}"
+    echo "  default:  ${DEFAULT_STAGES}   (in that order, stopping at the first failure)"
+    echo
+    echo "'audit' needs the network (it refreshes the advisory database) and is"
+    echo 'not in the default set; CI runs it as its own job. The command each'
+    echo 'stage runs is the one-line case in stage_command() above.'
+  } >&2
+  exit 2
+}
+
+# Run a command with RACK_ENV=test, dropping inherited database URLs and the
+# scratch-guard override unless the caller genuinely provisioned a database
+# (see the header).
+test_env() {
+  if [ "${RACK_ENV:-}" = "test" ]; then
+    env RACK_ENV=test "$@"
+  else
+    # -u before any assignment: BSD env rejects the other order.
+    env -u ADMIN_DATABASE_URL \
+        -u ADMIN_DATABASE_URL_RO \
+        -u ADMIN_DATABASE_URL_MIGRATIONS \
+        -u RODAUTH_ADMIN_ALLOW_DESTRUCTIVE_SPECS \
+        RACK_ENV=test "$@"
+  fi
+}
+
+run_stage() {
+  printf '\n==> %s\n' "$1" >&2
+  stage_command "$1"
+}
+
+# Branch on $# rather than assigning from "$@" first: bash 3.2 (macOS)
+# treats an empty "$@" as unbound under `set -u`.
+if [ "$#" -eq 0 ]; then
+  # shellcheck disable=SC2206 # deliberate word splitting: STAGES is a list
+  stages=($DEFAULT_STAGES)
+else
+  stages=("$@")
+fi
+
+# Reject the whole invocation before running anything, so a typo in the last
+# stage does not cost a full suite first.
+for stage in "${stages[@]}"; do
+  case " $STAGES " in
+    *" $stage "*) continue ;;
+  esac
+  case "$stage" in
+    -h|--help) usage ;;
+    *) printf 'bin/ci: unknown stage %s\n\n' "$stage" >&2; usage ;;
+  esac
+done
+
+for stage in "${stages[@]}"; do
+  # The failing stage's own exit status is bin/ci's, so a caller can tell a
+  # failed suite from a usage error (2) or a signal.
+  run_stage "$stage" || {
+    status=$?
+    printf '\n==> FAILED at stage: %s (exit %s)\n' "$stage" "$status" >&2
+    exit "$status"
+  }
+done
+
+printf '\n==> ok: %s\n' "${stages[*]}" >&2
