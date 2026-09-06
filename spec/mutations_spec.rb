@@ -325,6 +325,12 @@ RSpec.describe RodauthAdmin::App do
       expect(last_response).to be_redirect
       expect(authdb[:account_identities].where(id: theirs).count).to eq(1)
     end
+
+    # The route is exact: the confirm page is not rendered under a longer path.
+    it 'is a 404 for anything past /unlink' do
+      get "#{identity_path}/extra"
+      expect(last_response.status).to eq(404)
+    end
   end
 
   # The freshness window is the one guard with no visible form field, so it

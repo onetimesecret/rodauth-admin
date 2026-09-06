@@ -138,7 +138,7 @@ module RodauthAdmin
     # Mounted under `r.on 'accounts', Integer` in app.rb, after the read-only
     # GET, which matches /accounts/:id exactly and so never reaches here.
     def verb_routes(req, id)
-      req.on 'identities', Integer, 'unlink' do |identity_id|
+      req.is 'identities', Integer, 'unlink' do |identity_id|
         req.get { verb_confirm(req, id, UNLINK_SLUG, identity_id: identity_id) }
         req.post { verb_execute(req, id, UNLINK_SLUG, identity_id: identity_id) }
       end
