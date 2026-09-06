@@ -1,6 +1,6 @@
 -- db/grants/postgres/rodauth_admin_roles.sql
 --
--- Rodauth Admin's two runtime credentials on the existing authdb, following
+-- Rodauth Admin's three runtime credentials on the existing authdb, following
 -- the tenant app's own pattern (initialize_auth_db.sql): a runtime user with
 -- DML only, and the migrator (ots_migrator) owning every table. There is no
 -- admin-specific migration user; `rake db:migrate` runs offline with
@@ -13,33 +13,46 @@
 --                      audit_logging touches, plus DML on the admin's own
 --                      tables (admin_operators, admin_actions).
 --   rodauth_admin_ro   read-only user (ADMIN_DATABASE_URL_RO). Every admin
---                      query. Phase 4 widens it to UPDATE/DELETE on the
---                      token and key tables, in a reviewed change to this
---                      file and nowhere else.
+--                      query. SELECT only, permanently: Phase 4 was going to
+--                      widen this role to UPDATE/DELETE and deliberately did
+--                      not (see below).
+--   rodauth_admin_verbs  mutation user (ADMIN_DATABASE_URL_VERBS). The Phase 4
+--                      verbs (CHARTER §6 item 4) and the admin_actions row
+--                      each one commits in the same transaction. DELETE on
+--                      the token, key and session tables; nothing else.
 --
--- Neither role can CREATE, ALTER, DROP or TRUNCATE anything.
+-- Phase 4 revision (2026-09-05). CHARTER §4 said Phase 4 would widen
+-- rodauth_admin_ro to UPDATE/DELETE on the token and key tables. It does not:
+-- a role named _ro that can DELETE is a trap for whoever reads the connection
+-- string during an incident, and every read screen would then be running with
+-- delete privilege for the sake of a handful of POSTs. A third role costs one
+-- URL and buys a real boundary, so the verbs got their own.
+--
+-- No role can CREATE, ALTER, DROP or TRUNCATE anything.
 --
 -- Run as a superuser or as ots_migrator (the database owner) AFTER
 -- `rake db:migrate` has created the admin tables. The database name and the
--- two passwords are psql variables rather than placeholders to edit: they
+-- role passwords are psql variables rather than placeholders to edit: they
 -- are values, not SQL, so passing them keeps a password containing '/', '&'
 -- or a quote from being mangled or from ending up in the file.
 --
 --   psql -d postgres -v ON_ERROR_STOP=1 \
 --        -v dbname=onetime_authdb \
 --        -v app_pw="$APP_ROLE_PASSWORD" -v ro_pw="$RO_ROLE_PASSWORD" \
+--        -v verbs_pw="$VERBS_ROLE_PASSWORD" \
 --        -f db/grants/postgres/rodauth_admin_roles.sql
 --
 -- This file is the grant list; review changes to it like code.
 
 CREATE ROLE rodauth_admin_app LOGIN PASSWORD :'app_pw';
 CREATE ROLE rodauth_admin_ro  LOGIN PASSWORD :'ro_pw';
+CREATE ROLE rodauth_admin_verbs LOGIN PASSWORD :'verbs_pw';
 
-GRANT CONNECT ON DATABASE :"dbname" TO rodauth_admin_app, rodauth_admin_ro;
+GRANT CONNECT ON DATABASE :"dbname" TO rodauth_admin_app, rodauth_admin_ro, rodauth_admin_verbs;
 
 \c :"dbname"
 
-GRANT USAGE ON SCHEMA public TO rodauth_admin_app, rodauth_admin_ro;
+GRANT USAGE ON SCHEMA public TO rodauth_admin_app, rodauth_admin_ro, rodauth_admin_verbs;
 
 -- ============================================================================
 -- rodauth_admin_app: the login door + the admin's own tables
@@ -184,12 +197,102 @@ GRANT SELECT (id, account_id) ON account_previous_password_hashes TO rodauth_adm
 -- account_sms_codes. Not in the capability table, so not readable.
 
 -- ============================================================================
+-- rodauth_admin_verbs: the Phase 4 mutations (CHARTER §6 item 4)
+-- ============================================================================
+--
+-- One role per verb table, and the audit row on the same connection so that
+-- the mutation and its admin_actions entry commit or roll back together
+-- (docs/design/database-credentials.md). The verbs and what they touch:
+--
+--   clear_lockout               DELETE account_lockouts, account_login_failures
+--   force_password_reset        UPSERT account_password_change_times,
+--                               DELETE account_password_reset_keys
+--   expire_tokens               DELETE account_password_reset_keys,
+--                               account_verification_keys,
+--                               account_login_change_keys,
+--                               account_email_auth_keys
+--   disable_mfa                 DELETE account_otp_keys, account_otp_unlocks,
+--                               account_recovery_codes,
+--                               account_webauthn_keys,
+--                               account_webauthn_user_ids
+--   regenerate_recovery_codes   DELETE + INSERT account_recovery_codes
+--   revoke_sessions             DELETE account_active_session_keys
+--   revoke_refresh_keys         DELETE account_jwt_refresh_keys
+--   unlink_identity             DELETE account_identities
+--
+-- SELECT accompanies every mutation: a verb reads the rows it is about to
+-- remove so the confirm page and the audit metadata can state the counts.
+
+GRANT SELECT ON
+  accounts,
+  account_statuses,
+  account_lockouts,
+  account_login_failures,
+  account_password_reset_keys,
+  account_verification_keys,
+  account_login_change_keys,
+  account_email_auth_keys,
+  account_otp_keys,
+  account_otp_unlocks,
+  account_recovery_codes,
+  account_webauthn_keys,
+  account_webauthn_user_ids,
+  account_active_session_keys,
+  account_jwt_refresh_keys,
+  account_identities,
+  account_password_change_times,
+  admin_operators
+TO rodauth_admin_verbs;
+
+-- The deletes. UPDATE is granted nowhere here: every verb but
+-- force_password_reset removes rows, and a verb that could UPDATE
+-- account_otp_keys could quietly re-key an operator's second factor.
+GRANT DELETE ON
+  account_lockouts,
+  account_login_failures,
+  account_password_reset_keys,
+  account_verification_keys,
+  account_login_change_keys,
+  account_email_auth_keys,
+  account_otp_keys,
+  account_otp_unlocks,
+  account_recovery_codes,
+  account_webauthn_keys,
+  account_webauthn_user_ids,
+  account_active_session_keys,
+  account_jwt_refresh_keys,
+  account_identities
+TO rodauth_admin_verbs;
+
+-- regenerate_recovery_codes writes the replacement codes.
+GRANT INSERT ON account_recovery_codes TO rodauth_admin_verbs;
+
+-- force_password_reset upserts changed_at to a far-past timestamp so the
+-- tenant app's password_expiration feature demands a new password at the
+-- next login. An account that has never changed its password has no row,
+-- hence INSERT as well as UPDATE.
+GRANT INSERT, UPDATE ON account_password_change_times TO rodauth_admin_verbs;
+
+-- The audit row, written in the verb's own transaction. Append-only here as
+-- everywhere: INSERT and SELECT, no UPDATE, no DELETE.
+GRANT SELECT, INSERT ON admin_actions TO rodauth_admin_verbs;
+GRANT USAGE, SELECT ON SEQUENCE admin_actions_id_seq TO rodauth_admin_verbs;
+
+-- Never, for this role: account_password_hashes (a verb that could touch it
+-- would be setting passwords, which this tool does not do — force_password_reset
+-- expires the password, it does not change it), account_previous_password_hashes,
+-- account_remember_keys, account_session_keys, account_sms_codes,
+-- account_authentication_audit_logs (Rodauth's own log is evidence; the admin
+-- appends to admin_actions instead), admin_operators beyond SELECT, and
+-- accounts beyond SELECT (status changes are the tenant app's job).
+
+-- ============================================================================
 -- Verification
 -- ============================================================================
 --
 -- SELECT grantee, table_name, string_agg(privilege_type, ',' ORDER BY privilege_type)
 --   FROM information_schema.role_table_grants
---  WHERE grantee IN ('rodauth_admin_app', 'rodauth_admin_ro')
+--  WHERE grantee IN ('rodauth_admin_app', 'rodauth_admin_ro', 'rodauth_admin_verbs')
 --  GROUP BY 1, 2 ORDER BY 1, 2;
 --
 -- SELECT grantee, table_name, column_name

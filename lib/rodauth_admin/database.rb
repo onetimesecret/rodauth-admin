@@ -33,6 +33,9 @@ module RodauthAdmin
   #   app        runtime user. The ONLY connection Rodauth uses, and the one
   #              the allowlist and admin_actions are written through.
   #   readonly   read-only user; every admin query (Phase 2+).
+  #   verbs      mutation user; the Phase 4 verbs, and the admin_actions row
+  #              each one commits in the SAME transaction on this SAME
+  #              connection. Deliberately not the readonly role widened.
   #   migrator   the tenant app's existing migration user. Offline only:
   #              rake db:migrate and rake authdb:dev. Never touched by the
   #              running app.
@@ -79,6 +82,10 @@ module RodauthAdmin
 
       def readonly
         connection(:readonly) { connect(Env.database_url_ro, name: 'readonly') }
+      end
+
+      def verbs
+        connection(:verbs) { connect(Env.database_url_verbs, name: 'verbs') }
       end
 
       def migrator

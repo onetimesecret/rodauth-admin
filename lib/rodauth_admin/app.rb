@@ -238,7 +238,8 @@ module RodauthAdmin
     def health
       checks = {
         app: probe { Database.app.test_connection },
-        readonly: probe { Database.readonly.test_connection }
+        readonly: probe { Database.readonly.test_connection },
+        verbs: probe { Database.verbs.test_connection }
       }
       ok = checks.values.all?('ok')
       response.status = ok ? 200 : 503

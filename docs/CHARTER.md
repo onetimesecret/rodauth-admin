@@ -2,7 +2,7 @@
 title: Rodauth Admin — project charter
 status: Accepted
 decided: 2026-09-01
-revision: 3 (2026-09-05) — Phase 2 decisions: customer-count seam, colonel deep-link config
+revision: 4 (2026-09-05) — Phase 4 decision: third runtime credential for verbs
 repo-created: 2026-09-04
 supersedes-in-part: onetimesecret/onetimesecret docs/specs/rodauth-admin (see docs/specs/inherited/)
 published: https://claude.ai/code/artifact/b39b6c4c-0e7b-4dbb-9e28-d9f1c7ab5acb
@@ -92,7 +92,12 @@ Smallest thing that is honestly a separate product:
   instance gets a credential with INSERT/UPDATE/DELETE on exactly those tables
   from day one. The admin *query* path keeps a separate SELECT-only
   credential; Phase 4 mutations widen that one to UPDATE/DELETE on the token
-  and key tables — never DDL, never the migrations URL. Rodauth's `db` setting
+  and key tables — never DDL, never the migrations URL.
+  [Revision 4 (2026-09-05): they do not. The mutations got a *third* runtime
+  credential, `rodauth_admin_verbs` / `ADMIN_DATABASE_URL_VERBS`, and the
+  read-only role stays SELECT-only — a role named `_ro` that can DELETE
+  misleads the next reader, and every read screen would otherwise run with
+  delete privilege. See docs/design/database-credentials.md.] Rodauth's `db` setting
   takes its own Sequel database, so the split is one line of config, and both
   grant lists live in the repo, reviewed like code.
 - **Its own front door, the operator's existing identity:** operators sign in
@@ -170,7 +175,8 @@ Read against `00-scope.md` and `10-aggregate-visibility.md`
 
 1. **Bootstrap.** Repo, CI, deploy target on the admin network, the two DB
    credentials (auth-path writes on Rodauth's login tables; SELECT-only for
-   queries), sign-in with the operator's existing production account — MFA
+   queries) [revision 4: a third, mutation-only credential joins them in
+   Phase 4 rather than the read-only one being widened], sign-in with the operator's existing production account — MFA
    required, `active_sessions` off — gated by the allowlist table, and the
    `admin_actions` table (written from day one, even for sign-ins). Exit: an
    operator can log in and see a heartbeat.

@@ -11,11 +11,11 @@
 # inherited — before this file sets RACK_ENV:
 #
 #   default (local, and the `test` CI job) — a scratch SQLite file plays all
-#     three credentials, and this file builds and migrates it. Any
+#     four credentials, and this file builds and migrates it. Any
 #     ADMIN_DATABASE_URL* inherited from the shell is IGNORED and overwritten.
 #   pre-provisioned (the `test-postgres` CI job) — the caller set RACK_ENV=test
 #     *and* ADMIN_DATABASE_URL, pointing at a real PostgreSQL authdb that CI
-#     built, migrated and granted with three genuinely different roles.
+#     built, migrated and granted with genuinely different roles.
 #     Nothing is built here; the schema steps below are skipped when the
 #     schema exists, which is also what makes a re-run work.
 #
@@ -65,14 +65,16 @@ if PROVISIONED_DATABASE
   # A caller who sets only ADMIN_DATABASE_URL gets the single-credential
   # behaviour it had before; the Postgres lane sets all three.
   ENV['ADMIN_DATABASE_URL_RO'] ||= ENV.fetch('ADMIN_DATABASE_URL')
+  ENV['ADMIN_DATABASE_URL_VERBS'] ||= ENV.fetch('ADMIN_DATABASE_URL')
   ENV['ADMIN_DATABASE_URL_MIGRATIONS'] ||= ENV.fetch('ADMIN_DATABASE_URL')
   SCRATCH_DIR = nil
 else
   SCRATCH_DIR = File.join(Dir.tmpdir, "rodauth-admin-spec-#{Process.pid}")
   FileUtils.mkdir_p(SCRATCH_DIR)
-  # One SQLite file plays all three roles (docs/design/database-credentials.md).
+  # One SQLite file plays all four roles (docs/design/database-credentials.md).
   ENV['ADMIN_DATABASE_URL'] = "sqlite://#{SCRATCH_DIR}/authdb.sqlite3"
   ENV['ADMIN_DATABASE_URL_RO'] = ENV.fetch('ADMIN_DATABASE_URL')
+  ENV['ADMIN_DATABASE_URL_VERBS'] = ENV.fetch('ADMIN_DATABASE_URL')
   ENV['ADMIN_DATABASE_URL_MIGRATIONS'] = ENV.fetch('ADMIN_DATABASE_URL')
 end
 
@@ -90,6 +92,7 @@ if ScratchGuard.override?(ENV)
 
       ADMIN_DATABASE_URL             #{ENV.fetch('ADMIN_DATABASE_URL', '(unset)')}
       ADMIN_DATABASE_URL_RO          #{ENV.fetch('ADMIN_DATABASE_URL_RO', '(unset)')}
+      ADMIN_DATABASE_URL_VERBS       #{ENV.fetch('ADMIN_DATABASE_URL_VERBS', '(unset)')}
       ADMIN_DATABASE_URL_MIGRATIONS  #{ENV.fetch('ADMIN_DATABASE_URL_MIGRATIONS', '(unset)')}
 
     If you did not mean to set this, stop now and unset it.

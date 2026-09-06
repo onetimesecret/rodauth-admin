@@ -23,10 +23,12 @@ module ScratchGuard
   # Every URL the suite can open a writable connection on. FIXTURE_DB is the
   # migrator whenever it differs from the app URL, which is exactly the
   # provisioned mode this guard exists for; _RO is here because a
-  # misconfigured "read-only" credential is only read-only by convention.
+  # misconfigured "read-only" credential is only read-only by convention,
+  # and _VERBS can DELETE by design.
   CHECKED_URL_VARS = %w[
     ADMIN_DATABASE_URL
     ADMIN_DATABASE_URL_RO
+    ADMIN_DATABASE_URL_VERBS
     ADMIN_DATABASE_URL_MIGRATIONS
   ].freeze
 

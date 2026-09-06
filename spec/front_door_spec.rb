@@ -26,7 +26,7 @@ RSpec.describe RodauthAdmin::App do
     expect(last_response.status).to eq(200)
     body = JSON.parse(last_response.body)
     expect(body['status']).to eq('ok')
-    expect(body['checks']).to eq('app' => 'ok', 'readonly' => 'ok')
+    expect(body['checks']).to eq('app' => 'ok', 'readonly' => 'ok', 'verbs' => 'ok')
   end
 
   it 'turns away a valid production account that is not allowlisted, and records it' do

@@ -4,13 +4,16 @@ Standalone admin application for the Rodauth (`full`-mode) authentication
 store behind [Onetime Secret](https://github.com/onetimesecret/onetimesecret):
 the ~200k-account SQL authdb that the colonel console cannot see or touch.
 
-**Status:** Phase 1 (bootstrap) and Phase 2 (aggregate visibility) done —
-the front door works end to end against a local authdb, and the read-only
-stats board and locked / orphaned lists are in. This branch adds Phase 3
-(account detail, read-only): a `/account?q=<email or external_id>` lookup and
-an `/accounts/<id>` page showing status, lockout, MFA inventory, sessions,
-API refresh tokens, pending tokens, SSO identities, password age and the
-paginated auth-event timeline. A quality phase on top adds
+**Status:** Phase 1 (bootstrap), Phase 2 (aggregate visibility) and Phase 3
+(account detail) done; **Phase 4 (mutations) is in progress on this branch.**
+The front door works end to end against a local authdb, the read-only stats
+board and the locked / orphaned lists are in, and so is the account detail
+page: a `/account?q=<email or external_id>` lookup and an `/accounts/<id>`
+page showing status, lockout, MFA inventory, sessions, API refresh tokens,
+pending tokens, SSO identities, password age and the paginated auth-event
+timeline. Phase 4 adds the mutation verbs on top of it, each one guarded by a
+reason, an MFA-fresh session, an `admin_actions` row and its own database
+credential. A quality phase on top adds
 the checks: `bin/ci`, git hooks, five CI jobs and a branch rule
 ([`docs/design/quality-gates.md`](docs/design/quality-gates.md)). Deploy
 target and production grants are not yet applied.
@@ -18,12 +21,13 @@ target and production grants are not yet applied.
 ## Read first
 
 - [`docs/CHARTER.md`](docs/CHARTER.md) — why this is its own codebase, what it
-  owns, architecture, five-phase plan, open questions. Revision 3; revision 2
-  resolved operator identity: operators sign in with their **production**
-  account, gated by an allowlist.
+  owns, architecture, five-phase plan, open questions. Revision 4 records the
+  Phase 4 decision to give the mutations their own database credential;
+  revision 2 resolved operator identity: operators sign in with their
+  **production** account, gated by an allowlist.
 - [`docs/design/database-credentials.md`](docs/design/database-credentials.md)
-  — one database, three credentials: runtime, read-only, and the tenant
-  app's existing migrator. [`db/README.md`](db/README.md) has the
+  — one database, four credentials: runtime, read-only, mutations, and the
+  tenant app's existing migrator. [`db/README.md`](db/README.md) has the
   operational side.
 - [`docs/design/quality-gates.md`](docs/design/quality-gates.md) — what runs
   where: editor, pre-commit, pre-push, CI, branch rule; and what is
@@ -38,11 +42,14 @@ target and production grants are not yet applied.
 - Allowlist decides who may enter. Removing the row is offboarding.
 - Own audit trail: `admin_actions`, append-only, reason required, written
   from the first sign-in.
-- Two runtime credentials: an app role that writes exactly what a Rodauth
-  sign-in touches plus the admin's own two tables, and a SELECT-only role
-  for everything else. DDL only offline, through the tenant app's existing
+- Three runtime credentials: an app role that writes exactly what a Rodauth
+  sign-in touches plus the admin's own two tables, a SELECT-only role for
+  every query, and a verbs role that can delete exactly the tables the Phase 4
+  mutations name. DDL only offline, through the tenant app's existing
   migrator.
-- Read-only until Phase 4. No mutation ships before the guards exist.
+- No mutation without its guards: reason required, MFA-fresh session,
+  `admin_actions` row, and the mutation credential — never the read-only one
+  (`docs/design/database-credentials.md`, Phase 4 revision).
 - Three integration seams with the main repo, no more.
 
 ## Layout
@@ -55,16 +62,18 @@ bin/ci                       the single definition of "the checks" (lint, try, r
 lib/rodauth_admin.rb         boot: env validation, admin schema check, app load
 lib/rodauth_admin/
   env.rb                     every ENV read; unset RACK_ENV means production
-  database.rb                app / readonly / migrator connections
+  database.rb                app / readonly / verbs / migrator connections
   auth.rb                    the Rodauth instance (login, otp, lockout, audit_logging)
   app.rb                     the Roda app: healthz, rodauth routes, allowlist gate, stats board, account lists
   allowlist.rb               admin_operators reads and audited writes
   audit.rb                   admin_actions writer
   stats.rb                   aggregate authdb counts, briefly cached, degrades to unavailable
   account_list.rb            the locked / orphaned account lists, filtered and paginated
+  account_detail.rb          the per-account read side
+  verbs.rb                   the Phase 4 mutations: reason required, audited in the same transaction
   authdb_schema.rb           production authdb shape as a rodauth-tools feature list
 db/migrate/                  the admin tables (Sequel migrations, own bookkeeping table)
-db/grants/postgres/          the two runtime roles and every grant
+db/grants/postgres/          the three runtime roles and every grant
 views/                       layout, stats board, account lists; Rodauth renders its own forms
 try/, spec/                  tryouts (units) and RSpec (front-door flows)
 docs/design/                 database-credentials.md, quality-gates.md
@@ -75,6 +84,9 @@ docs/design/                 database-credentials.md, quality-gates.md
 ```bash
 bin/setup                       # bundle install + install the git hooks
 cp .env.example .env            # then edit; RACK_ENV=development
+                                # ADMIN_DATABASE_URL, _RO and _VERBS may all be
+                                # the same SQLite file locally; _MIGRATIONS too
+
 bundle exec rake authdb:dev     # local authdb from rodauth-tools templates (SQLite)
 bundle exec rake db:migrate     # admin_operators + admin_actions into the same file
 ```
@@ -118,7 +130,7 @@ They build a scratch SQLite instead.
 
 CI runs the same suite twice: once on scratch SQLite (`test`), and once on a
 real PostgreSQL authdb with `db/grants/postgres/rodauth_admin_roles.sql`
-applied and three distinct roles (`test-postgres`), which is the only place
+applied and distinct roles per credential (`test-postgres`), which is the only place
 the grants and the append-only trigger are proven rather than assumed
 (`spec/grants_spec.rb`, `db/README.md`). Alongside them: `lint` (RuboCop),
 `hygiene` (the pre-commit hooks over every file), `secrets` (gitleaks over the

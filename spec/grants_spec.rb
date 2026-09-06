@@ -7,15 +7,18 @@ require_relative 'spec_helper'
 # db/grants/postgres/rodauth_admin_roles.sql is the privilege boundary, and a
 # grant file that is never executed proves nothing. This is the check that it
 # says what it means: run against a PostgreSQL authdb with the grant file
-# applied and three genuinely distinct roles (the `test-postgres` CI job), it
+# applied and genuinely distinct roles (the `test-postgres` CI job), it
 # asserts the read-only role can read every Phase 2 and Phase 3 table and
-# cannot write, and that admin_actions is append-only for the runtime role
-# too.
+# cannot write, that the Phase 4 verbs role can delete exactly the tables the
+# verbs touch and nothing else, and that admin_actions is append-only for the
+# runtime role too.
 #
 # On SQLite — the default local and CI path — there are no roles and the file
 # is inert, so the whole group skips. That is the honest outcome: the
 # behaviour specs prove behaviour, this file proves privilege, and only
 # PostgreSQL can prove privilege (docs/design/database-credentials.md).
+# rubocop:disable RSpec/MultipleMemoizedHelpers -- four table lists and four
+# connections; naming them is what makes the failures readable.
 RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
   # CHARTER §3 / the Phase 2 block in the grant file.
   let(:phase_2_tables) do
@@ -48,7 +51,30 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
     ]
   end
 
+  # CHARTER §6 item 4 / the Phase 4 block in the grant file: every table a
+  # verb deletes from. Kept in one list because the failure that matters is
+  # "a verb lost its grant", not "which verb".
+  let(:verb_tables) do
+    %i[
+      account_lockouts
+      account_login_failures
+      account_password_reset_keys
+      account_verification_keys
+      account_login_change_keys
+      account_email_auth_keys
+      account_otp_keys
+      account_otp_unlocks
+      account_recovery_codes
+      account_webauthn_keys
+      account_webauthn_user_ids
+      account_active_session_keys
+      account_jwt_refresh_keys
+      account_identities
+    ]
+  end
+
   let(:ro) { RodauthAdmin::Database.readonly }
+  let(:verbs) { RodauthAdmin::Database.verbs }
   let(:app_db) { RodauthAdmin::Database.app }
   let(:migrator) { RodauthAdmin::Database.migrator }
 
@@ -57,8 +83,9 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
 
     distinct = [RodauthAdmin::Env.database_url,
                 RodauthAdmin::Env.database_url_ro,
-                RodauthAdmin::Env.database_url_migrations].uniq.size == 3
-    skip 'all three URLs are the same credential; nothing to prove' unless distinct
+                RodauthAdmin::Env.database_url_verbs,
+                RodauthAdmin::Env.database_url_migrations].uniq.size == 4
+    skip 'the URLs are not four distinct credentials; nothing to prove' unless distinct
   end
 
   describe 'rodauth_admin_ro' do
@@ -135,12 +162,84 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
       expect(migrator[:accounts].where(id: fixture_id).get(:status_id)).to eq(2)
     end
 
+    # The Phase 4 line the charter did NOT take: rodauth_admin_ro stays
+    # SELECT-only, and the verbs run as rodauth_admin_verbs instead
+    # (db/grants/postgres/rodauth_admin_roles.sql, Phase 4 revision).
+    it 'still cannot DELETE the tables the Phase 4 verbs mutate' do
+      verb_tables.each do |table|
+        expect { ro[table].where(false).delete }
+          .to raise_error(Sequel::DatabaseError, /permission denied/),
+              "rodauth_admin_ro can DELETE #{table}"
+      end
+    end
+
     it 'cannot write admin_actions' do
       expect { ro[:admin_actions].insert(action: 'x', actor: 'x', reason: 'x') }
         .to raise_error(Sequel::DatabaseError, /permission denied/)
       expect { ro[:admin_actions].where(action: 'grants_spec_ro').update(reason: 'rewritten') }
         .to raise_error(Sequel::DatabaseError, /permission denied/)
       expect { ro[:admin_actions].where(action: 'grants_spec_ro').delete }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+    end
+  end
+
+  describe 'rodauth_admin_verbs' do
+    # WHERE false still plans against the relation, so PostgreSQL checks the
+    # DELETE privilege — the statement proves the grant without depending on
+    # a fixture row existing, which keeps the lane re-runnable.
+    it 'can DELETE every table a verb mutates' do
+      verb_tables.each do |table|
+        expect { verbs[table].where(false).delete }
+          .not_to raise_error, "rodauth_admin_verbs cannot DELETE #{table}"
+      end
+    end
+
+    it 'can SELECT the rows it is about to delete' do
+      (verb_tables + %i[accounts account_statuses account_password_change_times]).each do |table|
+        expect { verbs[table].limit(1).all }
+          .not_to raise_error, "rodauth_admin_verbs cannot SELECT #{table}"
+      end
+    end
+
+    # force_password_reset upserts changed_at; regenerate_recovery_codes
+    # inserts fresh codes. Both are rolled back so the lane is repeatable.
+    it 'can UPSERT account_password_change_times and INSERT recovery codes' do
+      fixture_id = migrator[:accounts].insert(email: 'verbs-target@example.com', status_id: 2)
+
+      expect do
+        verbs.transaction(rollback: :always) do
+          verbs[:account_password_change_times].insert(id: fixture_id, changed_at: Time.utc(1970, 1, 1))
+          verbs[:account_password_change_times].where(id: fixture_id).update(changed_at: Time.utc(1970, 1, 1))
+          verbs[:account_recovery_codes].insert(id: fixture_id, code: 'grants-spec-code')
+        end
+      end.not_to raise_error
+    end
+
+    # The audit row commits with the mutation, on this connection.
+    it 'can INSERT admin_actions but cannot UPDATE or DELETE them' do
+      verbs[:admin_actions].insert(action: 'grants_spec_verbs', actor: 'spec', reason: 'privilege check')
+
+      expect { verbs[:admin_actions].where(action: 'grants_spec_verbs').update(reason: 'rewritten') }
+        .to raise_error(Sequel::DatabaseError, /permission denied|append-only/)
+      expect { verbs[:admin_actions].where(action: 'grants_spec_verbs').delete }
+        .to raise_error(Sequel::DatabaseError, /permission denied|append-only/)
+    end
+
+    it 'cannot touch the password hashes at all' do
+      expect { verbs[:account_password_hashes].limit(1).all }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+      expect { verbs[:account_password_hashes].insert(id: 0, password_hash: 'x') }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+      expect { verbs[:account_password_hashes].where(false).update(password_hash: 'x') }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+      expect { verbs[:account_password_hashes].where(false).delete }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+    end
+
+    it 'cannot write accounts, and cannot run DDL' do
+      expect { verbs[:accounts].where(false).delete }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+      expect { verbs.run('CREATE TABLE grants_spec_verbs_ddl (id int)') }
         .to raise_error(Sequel::DatabaseError, /permission denied/)
     end
   end
@@ -176,3 +275,4 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
     end
   end
 end
+# rubocop:enable RSpec/MultipleMemoizedHelpers

@@ -129,16 +129,18 @@ jobs:
       PGPORT: '5432'
       PGUSER: postgres
       PGPASSWORD: ci_superuser
-      # Throwaway, and never outside this job: the point is that the three
-      # URLs are three different roles, not that the passwords are secret.
+      # Throwaway, and never outside this job: the point is that the runtime
+      # URLs are different roles, not that the passwords are secret.
       APP_ROLE_PASSWORD: ci_app_role
       RO_ROLE_PASSWORD: ci_ro_role
+      VERBS_ROLE_PASSWORD: ci_verbs_role
       # Named for what it is. spec_helper refuses to run its truncating
       # fixtures against a database whose name does not say it is disposable
       # (test/ci/scratch), and the grant file takes the name as a variable.
       AUTHDB_NAME: onetime_authdb_ci
       ADMIN_DATABASE_URL: postgresql://rodauth_admin_app:ci_app_role@localhost:5432/onetime_authdb_ci
       ADMIN_DATABASE_URL_RO: postgresql://rodauth_admin_ro:ci_ro_role@localhost:5432/onetime_authdb_ci
+      ADMIN_DATABASE_URL_VERBS: postgresql://rodauth_admin_verbs:ci_verbs_role@localhost:5432/onetime_authdb_ci
       # The superuser stands in for ots_migrator: it owns the schema and is
       # the only credential that ever runs DDL.
       ADMIN_DATABASE_URL_MIGRATIONS: postgresql://postgres:ci_superuser@localhost:5432/onetime_authdb_ci
@@ -161,7 +163,7 @@ jobs:
         run: bundle exec rake db:migrate
 
       # The file is applied verbatim, exactly as db/README.md tells an
-      # operator to apply it: the database name and the two passwords are
+      # operator to apply it: the database name and the role passwords are
       # psql variables, so no text substitution touches the SQL and a
       # password containing '/' or '&' cannot corrupt it.
       # \c inside the file switches to the authdb.
