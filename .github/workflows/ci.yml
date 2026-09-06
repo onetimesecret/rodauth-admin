@@ -176,6 +176,20 @@ jobs:
                -v verbs_pw="${VERBS_ROLE_PASSWORD}" \
                -f db/grants/postgres/rodauth_admin_roles.sql
 
+      # The same invocation a second time. The roles now exist, so this run
+      # has to take the file's "already exists" branch for each and still
+      # exit 0: that is the proof the file is re-runnable, and re-running it
+      # is the upgrade path by which an existing deployment picks up a role
+      # or grant added in a later phase (db/README.md).
+      - name: Apply the grant file again (re-runnability)
+        run: |
+          psql -d postgres -v ON_ERROR_STOP=1 \
+               -v dbname="${AUTHDB_NAME}" \
+               -v app_pw="${APP_ROLE_PASSWORD}" \
+               -v ro_pw="${RO_ROLE_PASSWORD}" \
+               -v verbs_pw="${VERBS_ROLE_PASSWORD}" \
+               -f db/grants/postgres/rodauth_admin_roles.sql
+
       # Tryouts build their own in-process Sequel.sqlite databases and are
       # unaffected by the URLs above; they run here to keep the lane a full
       # suite rather than a subset. bin/ci sets RACK_ENV and otherwise leaves

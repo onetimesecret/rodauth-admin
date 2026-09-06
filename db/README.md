@@ -59,6 +59,13 @@ psql -U postgres -v ON_ERROR_STOP=1 \
      -f db/grants/postgres/rodauth_admin_roles.sql
 ```
 
+The grant file is safe to re-run, and re-running it with the same command is
+how an existing deployment picks up the Phase 4 role (`rodauth_admin_verbs`)
+and the grants added with it. A role that already exists is left alone,
+password included (the file prints a NOTICE and moves on; rotating a
+password is a separate `ALTER ROLE`), and every GRANT is a no-op the second
+time. `test-postgres` applies the file twice for exactly this reason.
+
 ## CI
 
 `.github/workflows/ci.yml` runs six jobs (`lint`, `test`, `test-postgres`,

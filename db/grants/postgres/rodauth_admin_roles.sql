@@ -42,11 +42,48 @@
 --        -v verbs_pw="$VERBS_ROLE_PASSWORD" \
 --        -f db/grants/postgres/rodauth_admin_roles.sql
 --
+-- The file is idempotent, and re-running it is the upgrade path: an existing
+-- deployment picks up a role or a grant added in a later phase by applying
+-- the whole file again with the same invocation. GRANT is idempotent by
+-- nature (granting a privilege a role already holds is a no-op), the two
+-- REVOKEs are inside a guarded DO block, and the three CREATE ROLE statements
+-- below are guarded so that a role which already exists is left exactly as
+-- it is -- password included -- with a NOTICE. Nothing here ever ALTERs a
+-- role: a password is rotated by an explicit ALTER ROLE, not as a side
+-- effect of re-applying grants, and since roles are cluster-wide a re-run
+-- against one database must not silently reset a credential every other
+-- database on the cluster shares. Pass the passwords on every run anyway: a
+-- role that turns out to be missing is created with them, and one that
+-- exists never reads them (psql does not expand variables in a skipped \if
+-- branch). The guard uses \gset and \if, which are psql (client-side)
+-- features since PostgreSQL 10; the server version does not matter for them.
+--
 -- This file is the grant list; review changes to it like code.
 
+-- Roles are cluster-wide, so pg_roles is consulted on the maintenance
+-- database before \c. psql variables are not interpolated inside a
+-- dollar-quoted DO body, which is why this is \gset + \if rather than a
+-- DO block: the password has to reach CREATE ROLE as :'app_pw'.
+SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rodauth_admin_app') AS create_app \gset
+\if :create_app
 CREATE ROLE rodauth_admin_app LOGIN PASSWORD :'app_pw';
-CREATE ROLE rodauth_admin_ro  LOGIN PASSWORD :'ro_pw';
+\else
+\echo 'NOTICE: role rodauth_admin_app already exists; leaving it (and its password) as it is'
+\endif
+
+SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rodauth_admin_ro') AS create_ro \gset
+\if :create_ro
+CREATE ROLE rodauth_admin_ro LOGIN PASSWORD :'ro_pw';
+\else
+\echo 'NOTICE: role rodauth_admin_ro already exists; leaving it (and its password) as it is'
+\endif
+
+SELECT NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rodauth_admin_verbs') AS create_verbs \gset
+\if :create_verbs
 CREATE ROLE rodauth_admin_verbs LOGIN PASSWORD :'verbs_pw';
+\else
+\echo 'NOTICE: role rodauth_admin_verbs already exists; leaving it (and its password) as it is'
+\endif
 
 GRANT CONNECT ON DATABASE :"dbname" TO rodauth_admin_app, rodauth_admin_ro, rodauth_admin_verbs;
 
