@@ -66,6 +66,12 @@ password included (the file prints a NOTICE and moves on; rotating a
 password is a separate `ALTER ROLE`), and every GRANT is a no-op the second
 time. `test-postgres` applies the file twice for exactly this reason.
 
+On PostgreSQL 14 and earlier, schema `public` grants CREATE to PUBLIC by
+default, and the file deliberately does not revoke it: that is a
+database-wide change that would also strip the tenant's migrator, and it
+needs the schema owner. The comment above `GRANT USAGE ON SCHEMA` in the
+file says what the database owner runs if they want it closed.
+
 ## CI
 
 `.github/workflows/ci.yml` runs six jobs (`lint`, `test`, `test-postgres`,

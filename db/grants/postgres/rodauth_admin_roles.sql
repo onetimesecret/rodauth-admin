@@ -28,7 +28,11 @@
 -- delete privilege for the sake of a handful of POSTs. A third role costs one
 -- URL and buys a real boundary, so the verbs got their own.
 --
--- No role can CREATE, ALTER, DROP or TRUNCATE anything.
+-- No role can CREATE, ALTER, DROP or TRUNCATE anything. On PostgreSQL 15+
+-- that is unconditional. On 14 and earlier it holds for every object here
+-- but not for the schema itself: those versions grant CREATE on schema
+-- public to PUBLIC, and this file deliberately does not revoke it (see the
+-- note below GRANT USAGE ON SCHEMA).
 --
 -- Run as a superuser or as ots_migrator (the database owner) AFTER
 -- `rake db:migrate` has created the admin tables. The database name and the
@@ -92,11 +96,29 @@ GRANT CONNECT ON DATABASE :"dbname" TO rodauth_admin_app, rodauth_admin_ro, roda
 GRANT USAGE ON SCHEMA public TO rodauth_admin_app, rodauth_admin_ro, rodauth_admin_verbs;
 
 -- PostgreSQL 14 and earlier grant CREATE on schema public to PUBLIC by
--- default, so "no role here can run DDL" would silently not hold on those
--- versions: every one of these roles could create its own tables (and
--- functions) in the schema it already has USAGE on. 15+ revoked it upstream;
--- this line makes the property true on both.
-REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+-- default, so on those versions each of these three roles can create its own
+-- tables (and functions) in the schema it has USAGE on. 15+ revoked that
+-- upstream. This file deliberately does NOT run
+-- `REVOKE CREATE ON SCHEMA public FROM PUBLIC;` to close it on <= 14:
+--
+--   - it is a database-wide change, not a change to these three roles. A
+--     privilege held through PUBLIC cannot be revoked from one role, so the
+--     only way to take it from rodauth_admin_* is to take it from every role
+--     in the database, including the tenant's own migrator. On <= 14
+--     ots_migrator typically holds CREATE on public through PUBLIC alone
+--     (owning every table is not owning the schema, which usually stays with
+--     the superuser that created the database), and the tenant's next
+--     `rake db:migrate` would then fail with "permission denied for schema
+--     public";
+--   - it needs the schema owner or a superuser. Run as ots_migrator per the
+--     header, it errors with "must be owner of schema public" and under
+--     ON_ERROR_STOP the file stops there, half-applied.
+--
+-- So on <= 14 that grant is the database owner's decision, made outside this
+-- file. If the owner wants it: first confirm the tenant migrator will keep
+-- CREATE (it owns the schema, or `GRANT CREATE ON SCHEMA public TO
+-- ots_migrator;`), then, as the schema owner or a superuser, run
+-- `REVOKE CREATE ON SCHEMA public FROM PUBLIC;` on the database.
 
 -- ============================================================================
 -- rodauth_admin_app: the login door + the admin's own tables
