@@ -11,9 +11,17 @@ board and the locked / orphaned lists are in, and so is the account detail
 page: a `/account?q=<email or external_id>` lookup and an `/accounts/<id>`
 page showing status, lockout, MFA inventory, sessions, API refresh tokens,
 pending tokens, SSO identities, password age and the paginated auth-event
-timeline. Phase 4 adds the mutation verbs on top of it, each one guarded by a
-reason, an MFA-fresh session, an `admin_actions` row and its own database
-credential. A quality phase on top adds
+timeline. Phase 4 adds the mutation verbs on top of it — clear lockout,
+force password reset, expire pending tokens, disable MFA, regenerate
+recovery codes, revoke sessions, revoke API refresh tokens and unlink an SSO
+identity — each one a confirm page and a POST, guarded by a reason, an
+`admin_actions` row written in the same transaction, its own database
+credential, and an **MFA-fresh session**: a second factor older than fifteen
+minutes is stepped up through `/otp-auth` before a verb page will open, and
+a stale POST is sent back to its confirm page instead of executing
+([`docs/design/mutations.md`](docs/design/mutations.md)). Two verbs
+(disable MFA, regenerate recovery codes) are refused on the operator's own
+account. A quality phase on top adds
 the checks: `bin/ci`, git hooks, five CI jobs and a branch rule
 ([`docs/design/quality-gates.md`](docs/design/quality-gates.md)). Deploy
 target and production grants are not yet applied.
@@ -29,6 +37,10 @@ target and production grants are not yet applied.
   — one database, four credentials: runtime, read-only, mutations, and the
   tenant app's existing migrator. [`db/README.md`](db/README.md) has the
   operational side.
+- [`docs/design/mutations.md`](docs/design/mutations.md) — the mutation
+  verbs: the guard chain per request, the transaction-with-audit rule, the
+  self-target rule, the two tenant-side dependencies, and what is
+  deliberately not a verb.
 - [`docs/design/quality-gates.md`](docs/design/quality-gates.md) — what runs
   where: editor, pre-commit, pre-push, CI, branch rule; and what is
   deliberately not gated.
@@ -71,12 +83,13 @@ lib/rodauth_admin/
   account_list.rb            the locked / orphaned account lists, filtered and paginated
   account_detail.rb          the per-account read side
   verbs.rb                   the Phase 4 mutations: reason required, audited in the same transaction
+  verb_routes.rb             the verbs' confirm/execute routes, the MFA-fresh guard and the per-verb copy
   authdb_schema.rb           production authdb shape as a rodauth-tools feature list
 db/migrate/                  the admin tables (Sequel migrations, own bookkeeping table)
 db/grants/postgres/          the three runtime roles and every grant
 views/                       layout, stats board, account lists; Rodauth renders its own forms
 try/, spec/                  tryouts (units) and RSpec (front-door flows)
-docs/design/                 database-credentials.md, quality-gates.md
+docs/design/                 database-credentials.md, mutations.md, quality-gates.md
 ```
 
 ## Local development

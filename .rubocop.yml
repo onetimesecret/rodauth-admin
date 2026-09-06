@@ -74,5 +74,12 @@ RSpec/ExampleLength:
 RSpec/MultipleExpectations:
   Max: 10
 
+# A `before` hook that walks the operator through the front door has one
+# thing to hand the examples afterwards (the TOTP secret it minted); an
+# instance variable is how RSpec passes it.
+RSpec/InstanceVariable:
+  Exclude:
+    - 'spec/**/*'
+
 RSpec/SpecFilePathFormat:
   Enabled: false

@@ -1,0 +1,75 @@
+<%#
+  The confirm page for every mutation verb (CHARTER §6 phase 4). One
+  template, driven by the slug: the per-verb sentences come from
+  VerbRoutes::COPY, the numbers from Verbs.preview.
+
+  The counts here are a preview, not a promise — a row can appear or vanish
+  between this page and the POST. What the verb actually did is in the flash
+  and in admin_actions.
+%>
+<% if !@preview.available %>
+  <div class="degraded">
+    <p><strong>This account is unavailable.</strong> The authdb is unreachable or the read-only credential is
+      misconfigured; try again. Nothing has been changed.</p>
+    <p class="footnote"><%= @preview.reason %></p>
+  </div>
+  <p><a href="<%= account_path(@account_id) %>">&larr; back to the account</a></p>
+<% else %>
+  <h2><%= @copy[:title] %></h2>
+  <p class="footnote">Account <code><%= @account_id %></code> &middot;
+    <a href="<%= account_path(@account_id) %>">back to the account</a></p>
+
+  <% if @error %>
+    <div class="degraded"><p><%= @error %></p></div>
+  <% end %>
+
+  <p><%= @copy[:does] %></p>
+  <% if @copy[:note] %>
+    <p class="footnote"><%= @copy[:note] %></p>
+  <% end %>
+
+  <% if @identity %>
+    <h3>Identity</h3>
+    <dl>
+      <dt>Provider</dt><dd><%= @identity.provider %></dd>
+      <dt>Issuer</dt><dd><code><%= @identity.issuer.to_s.empty? ? '—' : @identity.issuer %></code></dd>
+      <dt>Uid</dt><dd><code><%= @identity.uid %></code></dd>
+    </dl>
+    <p class="footnote">The uid is shown here but never recorded in <code>admin_actions</code>: for most providers it
+      is the customer's email address. Provider and issuer are recorded.</p>
+  <% end %>
+
+  <h3>What this would touch right now</h3>
+  <% if nothing_to_do?(@counts) %>
+    <p><%= @copy[:empty] %></p>
+  <% end %>
+  <table>
+    <tr><th>Table</th><th>Rows</th></tr>
+    <% verb_row_counts(@counts).each do |table, rows| %>
+      <tr><td><code><%= table %></code></td><td><%= rows %></td></tr>
+    <% end %>
+  </table>
+  <% if @counts && @counts[:login_failure_number] %>
+    <p class="footnote">The failure counter currently stands at <%= @counts[:login_failure_number] %>.</p>
+  <% end %>
+
+  <% if @self_target %>
+    <p class="degraded">This is your own account. This verb is refused on it: operators change their own MFA and
+      recovery codes in the tenant app.</p>
+  <% end %>
+
+  <% no_factor = @slug == 'regenerate-recovery-codes' && @counts && @counts[:second_factor] == false %>
+  <% if no_factor %>
+    <p class="degraded">This account has no TOTP or WebAuthn key, so there is no second factor for recovery codes to
+      back up. This verb is refused.</p>
+  <% end %>
+
+  <form method="post" action="<%= verb_path(@account_id, @slug, @identity && @identity.id) %>">
+    <%== csrf_tag(verb_path(@account_id, @slug, @identity && @identity.id)) %>
+    <label for="reason">Reason (required &mdash; recorded in <code>admin_actions</code>)</label>
+    <textarea id="reason" name="reason" rows="3" cols="60" required></textarea>
+    <p class="footnote">Say what happened and where it came from: a ticket number, a call, an incident. This is the
+      row a future reader has to judge this by.</p>
+    <input type="submit" value="<%= @copy[:title] %>"<%= (@self_target || no_factor) ? ' disabled' : '' %>>
+  </form>
+<% end %>

@@ -1,0 +1,26 @@
+<%#
+  The one and only render of a freshly minted set of recovery codes
+  (CHARTER §6 phase 4). Reached by POSTing the regenerate verb; there is no
+  redirect, because a redirect would carry the codes in a flash and a flash
+  is a cookie. Nothing here is stored: admin_actions recorded how many codes
+  were made, never which.
+%>
+<h2>New recovery codes</h2>
+<p class="footnote">Account <code><%= @account_id %></code> &middot; <%= @target %></p>
+
+<div class="degraded">
+  <p><strong>Copy these now.</strong> This page is the only time they are shown. They are in the authdb, but this tool
+    will never display them again and reloading this page will not bring them back.</p>
+</div>
+
+<table>
+  <tr><th>Recovery code</th></tr>
+  <% @codes.each do |code| %>
+    <tr><td><code><%= code %></code></td></tr>
+  <% end %>
+</table>
+
+<p class="footnote">Hand them to the customer over a channel you have already authenticated them on. The old codes are
+  gone: anything they wrote down before now no longer works.</p>
+
+<p><a href="<%= account_path(@account_id) %>">&larr; back to the account</a></p>
