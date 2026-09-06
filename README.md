@@ -6,7 +6,11 @@ the ~200k-account SQL authdb that the colonel console cannot see or touch.
 
 **Status:** Phase 1 (bootstrap) and Phase 2 (aggregate visibility) done —
 the front door works end to end against a local authdb, and the read-only
-stats board and locked / orphaned lists are in. A quality phase on top adds
+stats board and locked / orphaned lists are in. This branch adds Phase 3
+(account detail, read-only): a `/account?q=<email or external_id>` lookup and
+an `/accounts/<id>` page showing status, lockout, MFA inventory, sessions,
+API refresh tokens, pending tokens, SSO identities, password age and the
+paginated auth-event timeline. A quality phase on top adds
 the checks: `bin/ci`, git hooks, five CI jobs and a branch rule
 ([`docs/design/quality-gates.md`](docs/design/quality-gates.md)). Deploy
 target and production grants are not yet applied.

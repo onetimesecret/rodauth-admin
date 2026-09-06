@@ -1,0 +1,227 @@
+<%#
+  The per-account page (CHARTER §6 phase 3), read-only. Everything here is
+  the Result the query layer built: nothing on this page re-queries, and
+  nothing computes an age or an expiry in the template.
+
+  What this page deliberately never shows, because the query layer never
+  selects it: accounts.password_hash, the previous password hashes, the OTP
+  key, the recovery codes themselves, the WebAuthn public keys, and the
+  `key` column of every lockout / reset / verification / login-change /
+  email-auth / refresh-token row. Session ids arrive already truncated.
+
+  Email display policy is the same as the lists (views/accounts.erb): shown
+  in full, on purpose.
+%>
+<% if @detail.available %>
+  <% a = @detail.account %>
+  <h2>Account <code><%= a.id %></code></h2>
+
+  <h3>Identity &amp; status</h3>
+  <dl>
+    <dt>Email</dt><dd><%= a.email %></dd>
+    <dt>Status</dt><dd><%= a.status || a.status_id %></dd>
+    <dt>External id</dt>
+    <dd>
+      <% url = colonel_customer_url(a.external_id) %>
+      <% if url %>
+        <a href="<%= url %>"><code><%= a.external_id %></code></a>
+      <% elsif a.external_id %>
+        <code><%= a.external_id %></code>
+      <% else %>
+        — <span class="footnote">orphaned: no customer record to link to.</span>
+      <% end %>
+    </dd>
+    <dt>Created</dt><dd><%= utc_time(a.created_at) %></dd>
+    <dt>Updated</dt><dd><%= utc_time(a.updated_at) %></dd>
+  </dl>
+
+  <h3>Lockout</h3>
+  <% lockout = @detail.lockout %>
+  <% if lockout.locked %>
+    <dl>
+      <dt>Locked until</dt><dd><%= utc_time(lockout.deadline) %></dd>
+      <dt>Lockout email last sent</dt><dd><%= utc_time(lockout.email_last_sent) %></dd>
+      <dt>Login failures</dt><dd><%= lockout.login_failures %></dd>
+    </dl>
+  <% elsif lockout.present %>
+    <p>Not locked.</p>
+    <p class="footnote">An expired lockout row lingers here (deadline <%= utc_time(lockout.deadline) %>): Rodauth does
+      not delete it eagerly, so its presence is not a lockout.</p>
+    <dl>
+      <dt>Login failures</dt><dd><%= lockout.login_failures %></dd>
+    </dl>
+  <% else %>
+    <p>Not locked, no lockout row.</p>
+    <dl>
+      <dt>Login failures</dt><dd><%= lockout.login_failures %></dd>
+    </dl>
+  <% end %>
+
+  <h3>MFA inventory</h3>
+  <% mfa = @detail.mfa %>
+  <dl>
+    <dt>TOTP</dt>
+    <dd>
+      <% if mfa.otp.present %>
+        enrolled &middot; last use <%= utc_time(mfa.otp.last_use) %> &middot;
+        <%= mfa.otp.num_failures %> failures
+      <% else %>
+        not enrolled
+      <% end %>
+    </dd>
+    <dt>OTP unlock</dt>
+    <dd>
+      <% if mfa.otp_unlock.present %>
+        <%= mfa.otp_unlock.num_successes %> successes &middot; next attempt after
+        <%= utc_time(mfa.otp_unlock.next_auth_attempt_after) %>
+      <% else %>
+        no unlock attempt in progress
+      <% end %>
+    </dd>
+    <dt>Unused recovery codes (rows)</dt><dd><%= mfa.recovery_code_rows %></dd>
+  </dl>
+  <p class="footnote">Rodauth deletes a recovery code on use, so <code>used_at</code> is always NULL in production and
+    the unused count is simply the row count (db/README.md, &ldquo;Known drift&rdquo;).</p>
+
+  <h4>Passkeys</h4>
+  <% if mfa.webauthn_keys.empty? %>
+    <p>No WebAuthn keys.</p>
+  <% else %>
+    <table>
+      <tr><th>WebAuthn id</th><th>Sign count</th><th>Last use</th></tr>
+      <% mfa.webauthn_keys.each do |key| %>
+        <tr>
+          <td><code><%= key.webauthn_id %></code></td>
+          <td><%= key.sign_count %></td>
+          <td><%= utc_time(key.last_use) %></td>
+        </tr>
+      <% end %>
+    </table>
+  <% end %>
+  <p class="footnote">Public keys are never selected or shown.</p>
+
+  <h3>Sessions</h3>
+  <% sessions = @detail.sessions %>
+  <% if sessions.rows.empty? %>
+    <p>No active session keys.</p>
+  <% else %>
+    <table>
+      <tr><th>Session id</th><th>Created</th><th>Last use</th></tr>
+      <% sessions.rows.each do |session| %>
+        <tr>
+          <td><code><%= session.session_id %></code></td>
+          <td><%= utc_time(session.created_at) %></td>
+          <td><%= utc_time(session.last_use) %></td>
+        </tr>
+      <% end %>
+    </table>
+    <% if sessions.capped %>
+      <p class="footnote">showing <%= sessions.rows.length %> of <%= sessions.total %>, most recently used first.</p>
+    <% end %>
+  <% end %>
+  <p class="footnote">Active session keys, not users online: Rodauth keeps the rows until its inactivity cleanup runs.
+    Session ids are shown truncated &mdash; they are bearer-ish identifiers.</p>
+
+  <h3>API refresh tokens</h3>
+  <% tokens = @detail.refresh_tokens %>
+  <% if tokens.rows.empty? %>
+    <p>No JWT refresh tokens.</p>
+  <% else %>
+    <table>
+      <tr><th>Id</th><th>Deadline</th><th>Expired</th></tr>
+      <% tokens.rows.each do |token| %>
+        <tr>
+          <td><code><%= token.id %></code></td>
+          <td><%= utc_time(token.deadline) %></td>
+          <td><%= token.expired ? 'expired' : 'live' %></td>
+        </tr>
+      <% end %>
+    </table>
+    <% if tokens.capped %>
+      <p class="footnote">showing <%= tokens.rows.length %> of <%= tokens.total %>, latest deadline first.</p>
+    <% end %>
+    <p class="footnote">total <%= tokens.total %>. The token keys themselves are never selected.</p>
+  <% end %>
+
+  <h3>Pending tokens</h3>
+  <table>
+    <tr><th>Type</th><th>Present</th><th>Deadline / requested</th><th>Expired</th><th>Email last sent</th><th>New login</th></tr>
+    <% @detail.pending_tokens.each do |token| %>
+      <tr>
+        <td><code><%= token.type %></code></td>
+        <td><%= token.present ? 'yes' : 'no' %></td>
+        <td><%= utc_time(token.deadline || token.requested_at) %></td>
+        <td><%= token.expired.nil? ? '—' : (token.expired ? 'expired' : 'live') %></td>
+        <td><%= utc_time(token.email_last_sent) %></td>
+        <td><%= token.login || '—' %></td>
+      </tr>
+    <% end %>
+  </table>
+  <p class="footnote">A verification key carries <code>requested_at</code> and no deadline, so &ldquo;expired&rdquo; has
+    no answer for it and stays &mdash;. Every token <code>key</code> column is never selected.</p>
+
+  <h3>SSO identities</h3>
+  <% if @detail.identities.empty? %>
+    <p>No SSO identities.</p>
+  <% else %>
+    <table>
+      <tr><th>Provider</th><th>Issuer</th><th>Uid</th></tr>
+      <% @detail.identities.each do |identity| %>
+        <tr>
+          <td><%= identity.provider %></td>
+          <td><code><%= identity.issuer.to_s.empty? ? '—' : identity.issuer %></code></td>
+          <td><code><%= identity.uid %></code></td>
+        </tr>
+      <% end %>
+    </table>
+  <% end %>
+
+  <h3>Password</h3>
+  <% password = @detail.password %>
+  <dl>
+    <dt>Changed at</dt><dd><%= utc_time(password.changed_at) %></dd>
+    <dt>Age</dt><dd><%= password.age_days.nil? ? '—' : "#{password.age_days} days ago" %></dd>
+    <dt>Reuse history</dt><dd><%= password.previous_hash_count %></dd>
+  </dl>
+  <p class="footnote">Reuse history is a count only, never the hashes: no password hash is selected anywhere on this
+    page.</p>
+
+  <h3>Auth timeline</h3>
+  <% if @timeline.nil? || !@timeline.available %>
+    <div class="degraded">
+      <p><strong>The timeline is unavailable.</strong> The authdb is unreachable or the read-only credential is
+        misconfigured; try again.</p>
+      <p class="footnote"><%= @timeline && @timeline.reason %></p>
+    </div>
+  <% elsif @timeline.rows.empty? %>
+    <p>No authentication events recorded.</p>
+  <% else %>
+    <table>
+      <tr><th>At</th><th>Message</th><th>Metadata</th></tr>
+      <% @timeline.rows.each do |row| %>
+        <tr>
+          <td><%= utc_time(row.at) %></td>
+          <td><%= row.message %></td>
+          <td><code><%= row.metadata || '—' %></code></td>
+        </tr>
+      <% end %>
+    </table>
+    <div class="pagination">
+      <span>page <%= @timeline.page %> of <%= @timeline.pages %> &middot; total <%= @timeline.total %></span>
+      <% if @timeline.prev_page %>
+        <a href="<%= timeline_path(a.id, @timeline.prev_page, @timeline.per_page) %>">&larr; previous</a>
+      <% end %>
+      <% if @timeline.next_page %>
+        <a href="<%= timeline_path(a.id, @timeline.next_page, @timeline.per_page) %>">next &rarr;</a>
+      <% end %>
+      <span class="footnote"><%= @timeline.per_page %> per page</span>
+    </div>
+    <p class="footnote">Metadata is the JSON string Rodauth wrote, rendered as text: it is never parsed into markup.</p>
+  <% end %>
+<% else %>
+  <div class="degraded">
+    <p><strong>This account is unavailable.</strong> The authdb is unreachable or the read-only credential is
+      misconfigured; try again. This is not a statement about whether the account exists.</p>
+    <p class="footnote"><%= @detail.reason %></p>
+  </div>
+<% end %>

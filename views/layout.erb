@@ -15,7 +15,10 @@
     .flash.error { border-color: #b3261e; background: rgba(179,38,30,.08); }
     .flash.notice { border-color: #0d7263; background: rgba(13,114,99,.08); }
     label { display: block; margin-top: .8rem; }
-    input[type=text], input[type=email], input[type=password] { width: 100%; padding: .4rem; font: inherit; }
+    input[type=text], input[type=email], input[type=password], input[type=search] { width: 100%; padding: .4rem; font: inherit; }
+    header nav form { display: inline-block; margin-left: 1rem; }
+    header nav form input[type=search] { width: 14rem; padding: .2rem .4rem; }
+    header nav form label { display: none; }
     input[type=submit], button { margin-top: 1rem; padding: .5rem 1rem; font: inherit; }
     dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1rem; }
     dt { font-weight: 600; }
@@ -47,6 +50,10 @@
         <a href="/accounts?filter=locked">Locked</a>
         <a href="/accounts?filter=orphaned">Orphaned</a>
         <a href="<%= rodauth.logout_path %>">Sign out</a>
+        <form method="get" action="/account">
+          <label for="nav-q">Email or external id</label>
+          <input type="search" id="nav-q" name="q" placeholder="email or external id" aria-label="Email or external id" autocomplete="off">
+        </form>
       <% end %>
     </nav>
   </header>

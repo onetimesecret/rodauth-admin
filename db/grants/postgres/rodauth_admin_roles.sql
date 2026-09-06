@@ -124,8 +124,36 @@ GRANT SELECT ON admin_schema_info TO rodauth_admin_app;
 --
 -- spec/grants_spec.rb asserts all eight are readable by this role, and that
 -- writes are refused, whenever the suite runs against PostgreSQL.
--- The remaining tables below are Phase 3 (account detail) surface.
+--
+-- Phase 3 (account detail) reads the remaining tables below. They were
+-- granted here from Phase 1, but they are now in use: removing one is again
+-- removing a section of the per-account page, so they get the same treatment:
+--
+--   account_otp_unlocks                MFA panel: TOTP unlock state
+--                                      (num_successes, next_auth_attempt_after)
+--   account_jwt_refresh_keys           API refresh tokens: id + deadline,
+--                                      count and expiry; never the key
+--   account_password_reset_keys        pending tokens: reset requested?
+--                                      deadline, email_last_sent
+--   account_verification_keys          pending tokens: unverified account,
+--                                      requested_at, email_last_sent
+--   account_login_change_keys          pending tokens: pending new login,
+--                                      deadline
+--   account_email_auth_keys            pending tokens: email-auth link,
+--                                      deadline, email_last_sent
+--   account_identities                 SSO identities (provider, issuer, uid)
+--   account_password_change_times      password age (changed_at)
+--   account_authentication_audit_logs  the paginated auth-event timeline
+--
+-- spec/grants_spec.rb asserts these nine as well, as a separate example, so a
+-- regression names the phase whose screens went dark. Note that no GRANT
+-- changed for Phase 3: the list below was already the whole CHARTER §3
+-- surface. account_previous_password_hashes stays column-scoped (id,
+-- account_id) and is only ever COUNTed -- the hashes are never a capability.
 
+-- account_webauthn_user_ids is granted because CHARTER §3 lists it, but no
+-- screen reads it yet: no phase asserts it, and nothing breaks if it is
+-- unreadable today.
 GRANT SELECT ON
   accounts,
   account_statuses,

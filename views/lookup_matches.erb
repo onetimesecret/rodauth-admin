@@ -1,0 +1,48 @@
+<%#
+  Two outcomes share this page: a query that matches several accounts, and
+  a lookup that could not reach the authdb. Neither is a 404 — one found too
+  much, the other found nothing because it could not look.
+%>
+<h2><%= @lookup.available ? 'More than one account matches' : 'The lookup could not run' %></h2>
+
+<% if @lookup.available %>
+  <p>Several accounts match <code><%= @query %></code>. Production's uniqueness index on
+    <code>email</code> is partial — it covers open accounts only — so a closed account does not hold its
+    address and the same email can be re-registered. Pick the account you meant; open accounts are listed
+    first, then newest first.</p>
+
+  <table>
+    <tr>
+      <th>Id</th>
+      <th>Email</th>
+      <th>Status</th>
+      <th>External id</th>
+    </tr>
+    <% @lookup.matches.each do |match| %>
+      <tr>
+        <td><a href="<%= account_path(match.id) %>"><%= match.id %></a></td>
+        <td><%= match.email %></td>
+        <td><%= match.status || match.status_id %></td>
+        <td>
+          <% url = colonel_customer_url(match.external_id) %>
+          <% if url %>
+            <a href="<%= url %>"><code><%= match.external_id %></code></a>
+          <% elsif match.external_id %>
+            <code><%= match.external_id %></code>
+          <% else %>
+            —
+          <% end %>
+        </td>
+      </tr>
+    <% end %>
+  </table>
+  <p class="footnote">At most <%= RodauthAdmin::AccountDetail::LOOKUP_MAX %> matches are listed.</p>
+<% else %>
+  <div class="degraded">
+    <p><strong>This lookup is unavailable.</strong> The authdb is unreachable or the read-only credential is
+      misconfigured; try again. This is not a statement about whether the account exists.</p>
+    <p class="footnote"><%= @lookup.reason %></p>
+  </div>
+<% end %>
+
+<p><a href="/account">Try another lookup</a></p>
