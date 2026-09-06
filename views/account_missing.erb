@@ -3,6 +3,6 @@
   <p>No account has id <code><%= @missing_id %></code>. It was never issued, or the account has been deleted.</p>
 <% else %>
   <p>Nothing matches <code><%= @query %></code>. The lookup is an exact match on email and then
-    <code>external_id</code>; a lookup that could not reach the authdb also lands here.</p>
+    <code>external_id</code>, and the authdb answered: this is a real miss, not an unreachable database.</p>
 <% end %>
 <p><a href="/account">Try another lookup</a></p>

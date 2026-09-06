@@ -122,22 +122,20 @@ module RodauthAdmin
       end
 
       # The lookup, and the inbound deep link from the colonel console
-      # (/account?q=<external_id>). A hit redirects rather than rendering,
-      # so the operator lands on the canonical /accounts/<id> URL and can
-      # bookmark or share it. A miss and an unreachable authdb look the
-      # same from here (AccountDetail.lookup answers nil for both), which
-      # is why the page says only that nothing matched.
+      # (/account?q=<external_id>). A single hit redirects rather than
+      # rendering, so the operator lands on the canonical /accounts/<id>
+      # URL and can bookmark or share it. Three other outcomes are kept
+      # apart: several matches disambiguate on their own page, a miss is now
+      # genuinely a miss (the authdb answered and has nothing), and an
+      # unreachable authdb is the degraded panel, never a 404.
       r.get 'account' do
         q = r.params['q']
         # ?q[]=x arrives as an Array. Nothing but a String can be an email
         # or an external_id, so it is the empty query, not a 500.
         q = nil unless q.is_a?(String)
-        if q.nil? || q.strip.empty?
-          view 'lookup'
-        else
-          id = AccountDetail.lookup(q)
-          id ? r.redirect(account_path(id)) : missing(nil, q)
-        end
+        next view 'lookup' if q.nil? || q.strip.empty?
+
+        resolve_lookup(r, q)
       end
     end
 
@@ -193,6 +191,19 @@ module RodauthAdmin
     # links carry per_page and nothing else.
     def timeline_path(id, page, per_page)
       "#{account_path(id)}?page=#{page}&per_page=#{per_page}"
+    end
+
+    # One query, four answers. The order matters: an unreachable authdb is
+    # checked before the match list, because an empty list there means
+    # "nothing was asked", not "nothing exists".
+    def resolve_lookup(req, query)
+      @query = query
+      @lookup = AccountDetail.lookup(query)
+      return view 'lookup_matches' unless @lookup.available
+      return missing(nil, query) if @lookup.matches.empty?
+      return req.redirect(account_path(@lookup.matches.first.id)) if @lookup.matches.length == 1
+
+      view 'lookup_matches'
     end
 
     # The 404 both dead ends share: our own page, through the layout, so

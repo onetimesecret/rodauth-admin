@@ -165,36 +165,68 @@ r = RodauthAdmin::AccountDetail.find(id: 'nope', db: @db, now: @now)
 #=> [true, false, nil]
 
 ## Lookup matches an exact email
-RodauthAdmin::AccountDetail.lookup('Full@Example.com', db: @db)
-#=> @full
+r = RodauthAdmin::AccountDetail.lookup('Full@Example.com', db: @db)
+[r.available, r.reason, r.matches.map(&:id)]
+#=> [true, nil, [@full]]
+
+## A match carries the identity columns the disambiguation table renders
+m = RodauthAdmin::AccountDetail.lookup('Full@Example.com', db: @db).matches.first
+[m.id, m.email, m.status_id, m.status, m.external_id, m.frozen?]
+#=> [@full, 'Full@Example.com', 2, 'Verified', 'cust-full', true]
 
 ## Lookup folds case when the exact match misses
-RodauthAdmin::AccountDetail.lookup('full@EXAMPLE.com', db: @db)
-#=> @full
+RodauthAdmin::AccountDetail.lookup('full@EXAMPLE.com', db: @db).matches.map(&:id)
+#=> [@full]
 
 ## Lookup matches an external_id (the colonel deep link)
-RodauthAdmin::AccountDetail.lookup('cust-full', db: @db)
-#=> @full
+RodauthAdmin::AccountDetail.lookup('cust-full', db: @db).matches.map(&:id)
+#=> [@full]
 
 ## Lookup strips surrounding whitespace
-RodauthAdmin::AccountDetail.lookup("  cust-full \n", db: @db)
-#=> @full
+RodauthAdmin::AccountDetail.lookup("  cust-full \n", db: @db).matches.map(&:id)
+#=> [@full]
 
-## An empty or blank query matches nothing
-[RodauthAdmin::AccountDetail.lookup('', db: @db),
- RodauthAdmin::AccountDetail.lookup('   ', db: @db),
- RodauthAdmin::AccountDetail.lookup(nil, db: @db)]
-#=> [nil, nil, nil]
+## A closed account does not hold its email, so both rows come back, open first
+# The partial unique index (status_id IN (1, 2)) lets the same address be
+# re-registered after the first account is closed.
+@dupe_closed = @db[:accounts].insert(email: 'dupe@example.com', status_id: 3, external_id: 'cust-closed')
+@dupe_open = @db[:accounts].insert(email: 'dupe@example.com', status_id: 2, external_id: 'cust-open')
+r = RodauthAdmin::AccountDetail.lookup('dupe@example.com', db: @db)
+[r.available, r.matches.map(&:id), r.matches.map(&:status_id), r.matches.frozen?]
+#=> [true, [@dupe_open, @dupe_closed], [2, 3], true]
+
+## An exact email wins outright over a folded one
+# Both rows would match LOWER(email), but the exact pass answers first.
+@folded = @db[:accounts].insert(email: 'CASE@example.com', status_id: 2, external_id: 'cust-folded')
+@exact = @db[:accounts].insert(email: 'case@example.com', status_id: 2, external_id: 'cust-exact')
+RodauthAdmin::AccountDetail.lookup('case@example.com', db: @db).matches.map(&:id)
+#=> [@exact]
+
+## The external_id pass runs before the folded email pass
+# @deep_link's external_id is spelled exactly as the query; @mixed's email
+# only matches once folded. The external_id hit wins, alone.
+@mixed = @db[:accounts].insert(email: 'Deep@Link.example', status_id: 2, external_id: 'cust-mixed')
+@deep_link = @db[:accounts].insert(email: 'other@example.com', status_id: 2, external_id: 'deep@link.example')
+RodauthAdmin::AccountDetail.lookup('deep@link.example', db: @db).matches.map(&:id)
+#=> [@deep_link]
+
+## An empty, blank or non-String query matches nothing without touching the database
+[RodauthAdmin::AccountDetail.lookup('', db: @broken),
+ RodauthAdmin::AccountDetail.lookup('   ', db: @broken),
+ RodauthAdmin::AccountDetail.lookup(nil, db: @broken),
+ RodauthAdmin::AccountDetail.lookup(['cust-full'], db: @broken)].map { |r| [r.available, r.matches] }
+#=> [[true, []], [true, []], [true, []], [true, []]]
 
 ## No wildcards: a prefix is not a match
 [RodauthAdmin::AccountDetail.lookup('cust-%', db: @db),
  RodauthAdmin::AccountDetail.lookup('full@', db: @db),
- RodauthAdmin::AccountDetail.lookup('missing@example.com', db: @db)]
-#=> [nil, nil, nil]
+ RodauthAdmin::AccountDetail.lookup('missing@example.com', db: @db)].map(&:matches)
+#=> [[], [], []]
 
-## Lookup against an unreachable authdb answers nil rather than raising
-RodauthAdmin::AccountDetail.lookup('cust-full', db: @broken)
-#=> nil
+## An unreachable authdb is available: false, not an empty match list
+r = RodauthAdmin::AccountDetail.lookup('cust-full', db: @broken)
+[r.available, r.reason.is_a?(String), r.matches]
+#=> [false, true, []]
 
 ## The timeline is newest first and paginated at the default size
 t = RodauthAdmin::AccountDetail.timeline(id: @full, db: @db)

@@ -84,6 +84,12 @@ RSpec.describe RodauthAdmin::App do
     )
   end
 
+  def unavailable_lookup
+    RodauthAdmin::AccountDetail::Lookup.new(
+      available: false, reason: 'Sequel::DatabaseConnectionError: could not connect', matches: []
+    )
+  end
+
   describe 'the account page' do
     it 'renders every section of a fully seeded account' do
       id = seed_full!
@@ -296,12 +302,50 @@ RSpec.describe RodauthAdmin::App do
       expect(last_response.location).to end_with("/accounts/#{id}")
     end
 
-    it 'answers a query nothing matches with a 404' do
+    it 'disambiguates a duplicate email instead of guessing between accounts' do
+      # The partial unique index (status_id IN (1, 2)) lets a closed
+      # account's address be re-registered, so two rows can hold one email.
+      closed = create_account(email: 'dupe@example.com', password: password, external_id: 'extid-closed')
+      authdb[:accounts].where(id: closed).update(status_id: 3)
+      open_id = authdb[:accounts].insert(email: 'dupe@example.com', status_id: 2, external_id: 'extid-open')
+
+      sign_in_operator!
+      get '/account?q=dupe@example.com'
+      expect(last_response.status).to eq(200)
+      expect(last_response.body).to include('More than one account matches')
+      expect(last_response.body).to include("href=\"/accounts/#{open_id}\">#{open_id}</a>")
+      expect(last_response.body).to include("href=\"/accounts/#{closed}\">#{closed}</a>")
+      expect(last_response.body).to include('partial')
+    end
+
+    it 'lists the open account before the closed one' do
+      closed = create_account(email: 'dupe@example.com', password: password, external_id: 'extid-closed')
+      authdb[:accounts].where(id: closed).update(status_id: 3)
+      open_id = authdb[:accounts].insert(email: 'dupe@example.com', status_id: 2, external_id: 'extid-open')
+
+      sign_in_operator!
+      get '/account?q=dupe@example.com'
+      body = last_response.body
+      expect(body.index("/accounts/#{open_id}")).to be < body.index("/accounts/#{closed}")
+    end
+
+    it 'renders the degraded panel, still 200, when the lookup cannot reach the authdb' do
+      sign_in_operator!
+      allow(RodauthAdmin::AccountDetail).to receive(:lookup).and_return(unavailable_lookup)
+      get '/account?q=subject@example.com'
+      expect(last_response.status).to eq(200)
+      expect(last_response.body).to include('This lookup is unavailable')
+      expect(last_response.body).to include('Sequel::DatabaseConnectionError: could not connect')
+      expect(last_response.body).not_to include('No account matches')
+    end
+
+    it 'answers a query nothing matches with a 404 that claims a real miss' do
       sign_in_operator!
       get '/account?q=nobody@example.com'
       expect(last_response.status).to eq(404)
       expect(last_response.body).to include('No account matches')
       expect(last_response.body).to include('nobody@example.com')
+      expect(last_response.body).to include('not an unreachable database')
     end
 
     # The query is operator input rendered back into HTML.

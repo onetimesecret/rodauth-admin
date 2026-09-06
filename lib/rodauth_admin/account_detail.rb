@@ -88,7 +88,37 @@ module RodauthAdmin
         columns: %i[deadline email_last_sent], deadline: :deadline }
     ].freeze
 
+    # A lookup answers with the accounts a query could mean, capped: a
+    # disambiguation table is for choosing between a handful of rows, and an
+    # operator who typed something that matches more than ten accounts has
+    # not typed an identifier.
+    LOOKUP_MAX = 10
+    # The statuses production's partial unique index on accounts.email
+    # covers (Unverified, Verified). A row outside them does not hold its
+    # address, so its email can be re-registered — the whole reason a lookup
+    # can match more than one account.
+    OPEN_STATUS_IDS = [1, 2].freeze
+    # The same identity columns the account page selects, minus the probed
+    # timestamps: a match is rendered as a row in a disambiguation table.
+    LOOKUP_COLUMNS = ACCOUNT_COLUMNS
+    # Open accounts first, newest first within each group. A CASE rather
+    # than a bare boolean because SQLite has no boolean type to sort and
+    # PostgreSQL sorts false before true; an integer sorts the same on both.
+    OPEN_FIRST = Sequel.case(
+      [[Sequel::SQL::BooleanExpression.from_value_pairs(
+        Sequel[:accounts][:status_id] => OPEN_STATUS_IDS
+      ), 0]], 1
+    ).freeze
+
     Account = Data.define(:id, :email, :status_id, :status, :external_id, :created_at, :updated_at)
+    Match = Data.define(:id, :email, :status_id, :status, :external_id)
+
+    # @!attribute available
+    #   [Boolean] false only when the authdb was unreachable; matches is
+    #   then empty because nothing was asked, not because nothing matched.
+    # @!attribute matches
+    #   [Array<Match>] frozen, at most LOOKUP_MAX, best guess first.
+    Lookup = Data.define(:available, :reason, :matches)
     Lockout = Data.define(:present, :locked, :deadline, :email_last_sent, :login_failures)
     Otp = Data.define(:present, :last_use, :num_failures)
     OtpUnlock = Data.define(:present, :num_successes, :next_auth_attempt_after)
@@ -157,36 +187,53 @@ module RodauthAdmin
         Result.new(available: true, reason: nil, found: true, id: account_id, **sections).freeze
       end
 
-      # Resolve an operator's typed query to an account id.
+      # Resolve an operator's typed query to the accounts it could mean.
       #
-      # Match order is exact email, then exact external_id: an email is what
-      # an operator types, an external_id is what the colonel console deep
-      # links with, and the two value spaces do not overlap. No LIKE and no
-      # wildcards — this is a jump box, not a search engine, and a
-      # prefix search over 200k rows is both a seq scan and a way to page
-      # through the user table by guessing.
+      # There can be more than one. Production's uniqueness index on
+      # accounts.email is PARTIAL — `where status_id IN (1, 2)` (the
+      # inherited spec, docs/specs/inherited/10-aggregate-visibility.md) —
+      # so a closed account does not hold its address: the same email can be
+      # re-registered, and the table then carries two rows for it. Picking
+      # one with `.get(:id)` and redirecting was a coin flip decided by
+      # storage order, and it landed the operator on the wrong (usually
+      # older, usually closed) account without saying so. Every match is
+      # returned instead, and the caller decides.
       #
-      # The email match is tried case-sensitively first so it uses the
-      # unique index, then once more folded through LOWER(). The fallback is
-      # a seq scan, but it only runs for a mixed-case paste that already
-      # missed, never on the hot path. Ruby's String#downcase and SQL's
-      # lower() do not agree on every non-ASCII codepoint, so the folded pass
-      # is an ASCII-email convenience, not a Unicode-correct match; an address
-      # that only differs outside ASCII has to be pasted exactly.
+      # Match order is exact email, then exact external_id, then the email
+      # folded through LOWER(): an email is what an operator types, an
+      # external_id is what the colonel console deep links with. The first
+      # pass that returns rows wins, so an exact hit is never diluted by a
+      # folded one. No LIKE and no wildcards — this is a jump box, not a
+      # search engine, and a prefix search over 200k rows is both a seq scan
+      # and a way to page through the user table by guessing.
       #
-      # @return [Integer, nil] nil for an empty query, no match, or an
-      #   unreachable authdb (a lookup that cannot answer is not a match)
+      # The folded pass is a seq scan and it runs whenever the two exact
+      # passes miss, which includes every mistyped address; it is bounded by
+      # LOOKUP_MAX like the others. Ruby's String#downcase and SQL's lower()
+      # do not agree on every non-ASCII codepoint, so folding is an
+      # ASCII-email convenience, not a Unicode-correct match; an address that
+      # only differs outside ASCII has to be pasted exactly.
+      #
+      # Within a pass, open accounts (status_id IN (1, 2)) sort before closed
+      # ones and newer before older, so the single-match redirect and the
+      # top of the disambiguation table are the row an operator almost always
+      # meant.
+      #
+      # @param query [Object] operator input; anything but a non-blank String
+      #   is the empty query and touches no database
+      # @return [Lookup] never raises for database reasons. An unreachable
+      #   authdb is available: false, NOT an empty match list — "we could not
+      #   look" is not "there is nothing".
       def lookup(query, db: Database.readonly)
-        q = query.to_s.strip
-        return nil if q.empty?
+        return no_matches unless query.is_a?(String)
 
-        accounts = db[:accounts]
-        accounts.where(email: q).get(:id) ||
-          accounts.where(Sequel.function(:lower, :email) => q.downcase).get(:id) ||
-          accounts.where(external_id: q).get(:id)
+        q = query.strip
+        return no_matches if q.empty?
+
+        Lookup.new(available: true, reason: nil, matches: matches(db, q)).freeze
       rescue *Database::UNAVAILABLE_ERRORS => e
         RodauthAdmin.logger.warn('authdb account lookup unavailable', e)
-        nil
+        Lookup.new(available: false, reason: Database.failure_reason(e), matches: [].freeze).freeze
       end
 
       # @return [Timeline] never raises for database reasons
@@ -204,6 +251,40 @@ module RodauthAdmin
       private
 
       def coerce(value, default) = Integer(value, exception: false) || default
+
+      def no_matches = Lookup.new(available: true, reason: nil, matches: [].freeze).freeze
+
+      # The three passes, in order, stopping at the first that finds
+      # anything.
+      def matches(db, query)
+        base = lookup_dataset(db)
+        lookup_conditions(query).each do |condition|
+          rows = base.where(condition).all
+          return rows.map { |row| build_match(row) }.freeze unless rows.empty?
+        end
+        [].freeze
+      end
+
+      def lookup_dataset(db)
+        db[:accounts]
+          .left_join(:account_statuses, id: Sequel[:accounts][:status_id])
+          .select(*LOOKUP_COLUMNS)
+          .order(OPEN_FIRST, Sequel.desc(Sequel[:accounts][:id]))
+          .limit(LOOKUP_MAX)
+      end
+
+      def lookup_conditions(query)
+        [
+          { Sequel[:accounts][:email] => query },
+          { Sequel[:accounts][:external_id] => query },
+          { Sequel.function(:lower, Sequel[:accounts][:email]) => query.downcase }
+        ]
+      end
+
+      def build_match(row)
+        Match.new(id: row[:id], email: row[:email], status_id: row[:status_id],
+                  status: row[:status], external_id: row[:external_id]).freeze
+      end
 
       def clamp(value, default, min, max) = coerce(value, default).clamp(min, max)
 
