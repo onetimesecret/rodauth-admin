@@ -173,6 +173,7 @@ jobs:
                -v dbname="${AUTHDB_NAME}" \
                -v app_pw="${APP_ROLE_PASSWORD}" \
                -v ro_pw="${RO_ROLE_PASSWORD}" \
+               -v verbs_pw="${VERBS_ROLE_PASSWORD}" \
                -f db/grants/postgres/rodauth_admin_roles.sql
 
       # Tryouts build their own in-process Sequel.sqlite databases and are
