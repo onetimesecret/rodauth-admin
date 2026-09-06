@@ -46,9 +46,14 @@
   <table>
     <tr><th>Table</th><th>Rows</th></tr>
     <% verb_row_counts(@counts).each do |table, rows| %>
-      <tr><td><code><%= table %></code></td><td><%= rows %></td></tr>
+      <tr><td><code><%= table %></code></td><td><%= rows.nil? ? 'unavailable' : rows %></td></tr>
     <% end %>
   </table>
+  <% if unreadable_counts?(@counts) %>
+    <p class="footnote">A count marked unavailable could not be read: the read-only credential may lack
+      <code>SELECT (id, deadline) ON account_remember_keys</code>, the phase 4 grant. The verb itself is
+      unaffected &mdash; it runs on the verbs credential and reports the real count afterwards.</p>
+  <% end %>
   <% if @counts && @counts[:login_failure_number] %>
     <p class="footnote">The failure counter currently stands at <%= @counts[:login_failure_number] %>.</p>
   <% end %>

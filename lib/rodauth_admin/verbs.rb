@@ -147,6 +147,9 @@ module RodauthAdmin
     # @!attribute counts
     #   [Hash{Symbol=>Hash}] verb method name => the same counts shape the
     #   verb returns. nil when the account was not found or not readable.
+    #   One count inside it can be nil on its own: revoke_sessions'
+    #   account_remember_keys, when that table could not be read (see
+    #   remember_keys_count). An unknown count is not zero.
     Preview = Data.define(:available, :reason, :found, :account_id, :counts, :identities)
 
     # Tables each verb clears, in delete order. Every name and column here
@@ -311,6 +314,14 @@ module RodauthAdmin
       # These are estimates by construction — a row can appear or vanish
       # between the GET and the POST. The verb's own returned counts are the
       # truth; this is what the operator is told they are about to do.
+      #
+      # No rescue here, deliberately: AccountDetail.find swallows its own
+      # outages, and the one count taken directly (account_remember_keys,
+      # see remember_keys_count) degrades on its own to nil. Nothing else in
+      # here touches the database, so a Preview is either unavailable as a
+      # whole (the account could not be read) or available with at most that
+      # one count unknown — never a 500, and never all eight confirm pages
+      # lost to a number only one of them displays.
       def preview(id:, db: Database.readonly)
         detail = AccountDetail.find(id: id, db: db)
         return unavailable_preview(detail) unless detail.available
@@ -318,12 +329,6 @@ module RodauthAdmin
 
         Preview.new(available: true, reason: nil, found: true, account_id: detail.id,
                     counts: preview_counts(detail, db).freeze, identities: detail.identities).freeze
-      rescue Sequel::Error => e
-        # AccountDetail swallows its own outages; the one count taken here
-        # directly (account_remember_keys) has to degrade the same way, or a
-        # missing grant would surface as a 500 on the confirm page instead of
-        # the degraded panel every other read screen renders.
-        unreadable_preview(id, e)
       end
 
       private
@@ -499,7 +504,22 @@ module RodauthAdmin
       # is no row here worth showing).
       def sessions_preview(detail, db)
         { account_active_session_keys: detail.sessions.total,
-          account_remember_keys: db[:account_remember_keys].where(id: detail.id).count }
+          account_remember_keys: remember_keys_count(detail.id, db) }
+      end
+
+      # The only query in preview outside AccountDetail's own degradation,
+      # and the only one whose grant is new in phase 4: a database
+      # provisioned before it has a rodauth_admin_ro with no SELECT on
+      # account_remember_keys at all. That must cost exactly this one
+      # number — nil, rendered as "unavailable" on the revoke-sessions page —
+      # not the whole Preview and with it every verb's confirm page. The verb
+      # itself is unaffected: it runs on the verbs credential and reports the
+      # real count afterwards.
+      def remember_keys_count(account_id, db)
+        db[:account_remember_keys].where(id: account_id).count
+      rescue *Database::UNAVAILABLE_ERRORS => e
+        RodauthAdmin.logger.warn('authdb account_remember_keys count unavailable', e)
+        nil
       end
 
       def lockout_preview(lockout)
@@ -536,11 +556,6 @@ module RodauthAdmin
       def unavailable_preview(detail)
         Preview.new(available: false, reason: detail.reason, found: false,
                     account_id: detail.id, counts: nil, identities: nil).freeze
-      end
-
-      def unreadable_preview(account_id, error)
-        Preview.new(available: false, reason: error.message, found: false,
-                    account_id: account_id, counts: nil, identities: nil).freeze
       end
 
       def not_found_preview(account_id)

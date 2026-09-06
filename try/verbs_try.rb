@@ -331,8 +331,54 @@ class BrokenDb
   def schema(_table) = raise(Sequel::DatabaseError, 'authdb is down')
 end
 p = V.preview(id: 1, db: BrokenDb.new)
-[p.available, p.found, p.counts, p.reason.include?('authdb is down')]
-#=> [false, false, nil, true]
+[p.available, p.found, p.counts, p.reason]
+#=> [false, false, nil, 'Sequel::DatabaseError: authdb is down']
+
+## An unreadable account_remember_keys costs that one count, not the Preview
+# A db whose account_remember_keys cannot be read (a rodauth_admin_ro
+# provisioned before the phase 4 grant), everything else real. Raises on
+# the table lookup: none of the other seven previews go near it.
+class TableBreaker < SimpleDelegator
+  def initialize(db, table, error)
+    super(db)
+    @table = table
+    @error = error
+  end
+
+  def [](table)
+    raise @error if table == @table
+
+    __getobj__[table]
+  end
+end
+denied = Sequel::DatabaseError.new('PG::InsufficientPrivilege: ERROR:  permission denied for table ' \
+                                   'account_remember_keys')
+@bid = seed(@db, @now)
+p = V.preview(id: @bid, db: TableBreaker.new(@db, :account_remember_keys, denied))
+[p.available, p.found, p.reason, p.counts[:revoke_sessions], p.counts.length]
+#=> [true, true, nil, { account_active_session_keys: 2, account_remember_keys: nil }, 8]
+
+## The other seven previews are intact when only that table is unreadable
+p = V.preview(id: @bid, db: TableBreaker.new(@db, :account_remember_keys, Sequel::DatabaseError.new('denied')))
+c = p.counts
+[c[:clear_lockout][:account_lockouts], c[:expire_tokens].values, c[:disable_mfa][:account_otp_keys],
+ c[:regenerate_recovery_codes][:second_factor], c[:revoke_refresh_keys][:account_jwt_refresh_keys],
+ c[:unlink_identity][:account_identities], p.identities.length]
+#=> [1, [1, 1, 1, 1], 1, true, 1, 1, 1]
+
+## A socket reset during that count degrades too: the rescue is all of UNAVAILABLE_ERRORS, not just Sequel's
+p = V.preview(id: @bid, db: TableBreaker.new(@db, :account_remember_keys, Errno::ECONNRESET))
+sessions = p.counts[:revoke_sessions]
+[p.available, sessions[:account_remember_keys], sessions[:account_active_session_keys]]
+#=> [true, nil, 2]
+
+## A failure that is not a database outage is not swallowed by that rescue
+begin
+  V.preview(id: @bid, db: TableBreaker.new(@db, :account_remember_keys, RuntimeError.new('a bug')))
+rescue RuntimeError => e
+  e.message
+end
+#=> 'a bug'
 
 ## SLUGS maps every URL slug to a public verb, and every verb answers
 [V::SLUGS.length, V::SLUGS.all? { |slug, m| slug.tr('-', '_').to_sym == m && V.respond_to?(m) },

@@ -257,7 +257,7 @@ module RodauthAdmin
     # inside the transaction, which is the check that counts).
     def operator_account?(account_id)
       Allowlist.allowed?(account_id, db: Database.readonly)
-    rescue Sequel::Error
+    rescue *Database::UNAVAILABLE_ERRORS
       true
     end
 
@@ -287,9 +287,16 @@ module RodauthAdmin
       (counts || {}).except(*NON_TABLE_KEYS)
     end
 
+    # A nil count is one Verbs.preview could not read (account_remember_keys
+    # on a database without the phase 4 grant). Unknown is not zero: the
+    # "nothing to remove" sentence is withheld rather than asserted.
     def nothing_to_do?(counts)
       rows = verb_row_counts(counts)
-      !rows.empty? && rows.values.sum.zero?
+      !rows.empty? && !unreadable_counts?(counts) && rows.values.sum.zero?
+    end
+
+    def unreadable_counts?(counts)
+      verb_row_counts(counts).value?(nil)
     end
   end
   # rubocop:enable Metrics/ModuleLength

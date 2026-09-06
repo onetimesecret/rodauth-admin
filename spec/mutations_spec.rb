@@ -399,4 +399,62 @@ RSpec.describe RodauthAdmin::App do
       expect(actions.size - before).to be <= 1, 'only the logout row, if that'
     end
   end
+
+  # The remember-keys count is the one preview query outside AccountDetail's
+  # own degradation, and its grant is new in phase 4: a database provisioned
+  # before it has a rodauth_admin_ro that cannot read the table at all. That
+  # must cost exactly the one number, on the one page that shows it — not
+  # the form on all eight.
+  describe 'a confirm page when account_remember_keys cannot be read' do
+    before do
+      denied = Sequel::DatabaseError.new('PG::InsufficientPrivilege: ERROR:  permission denied for table ' \
+                                         'account_remember_keys')
+      readonly_without_grant = Class.new(SimpleDelegator) do
+        define_method(:[]) do |table|
+          raise denied if table == :account_remember_keys
+
+          __getobj__[table]
+        end
+      end.new(RodauthAdmin::Database.readonly)
+      allow(RodauthAdmin::Database).to receive(:readonly).and_return(readonly_without_grant)
+    end
+
+    it 'still renders every verb with its form' do
+      stock_target!
+      pages = RodauthAdmin::Verbs::SLUGS.keys.map { |slug| verb_path(target, slug) }
+      pages << "/accounts/#{target}/identities/#{authdb[:account_identities].where(account_id: target).get(:id)}/unlink"
+      pages.each do |path|
+        get path
+        expect(last_response.status).to eq(200), "#{path}: #{last_response.status}"
+        expect(last_response.body).to include('name="reason"'), path
+        expect(last_response.body).not_to include('This account is unavailable'), path
+      end
+    end
+
+    it 'marks that one count unavailable on revoke-sessions, and says why, without calling it nothing' do
+      stock_target!
+      get verb_path(target, 'revoke-sessions')
+      expect(last_response.body).to include('<code>account_remember_keys</code></td><td>unavailable</td>')
+      expect(last_response.body).to include('<code>account_active_session_keys</code></td><td>1</td>')
+      expect(last_response.body).to include('SELECT (id, deadline) ON account_remember_keys')
+      expect(last_response.body).not_to include(RodauthAdmin::VerbRoutes::COPY.dig('revoke-sessions', :empty))
+    end
+
+    it 'withholds "nothing to remove" when the only readable count is zero' do
+      stock_target!
+      authdb[:account_active_session_keys].where(account_id: target).delete
+      get verb_path(target, 'revoke-sessions')
+      expect(last_response.status).to eq(200)
+      expect(last_response.body).to include('<code>account_active_session_keys</code></td><td>0</td>')
+      expect(last_response.body).to include('<code>account_remember_keys</code></td><td>unavailable</td>')
+      expect(last_response.body).not_to include(RodauthAdmin::VerbRoutes::COPY.dig('revoke-sessions', :empty))
+    end
+
+    it 'says nothing about it on a page that does not show that count' do
+      stock_target!
+      get verb_path(target, 'clear-lockout')
+      expect(last_response.body).not_to include('unavailable')
+      expect(last_response.body).to include('<code>account_lockouts</code></td><td>1</td>')
+    end
+  end
 end
