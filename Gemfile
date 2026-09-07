@@ -27,7 +27,7 @@ gem 'rodauth', '~> 2.0'
 gem 'rodauth-tools', '~> 0.4.0'
 
 # Web server and middleware
-gem 'puma', '>= 6.0', '< 8.0'
+gem 'puma', '>= 6.0', '< 9.0'
 gem 'rack', '>= 3.2.6', '< 4.0'
 gem 'rack-protection', '~> 4.1'
 
@@ -61,7 +61,7 @@ gem 'rqrcode', '~> 3.1'
 # Logging
 # ====================================
 
-gem 'semantic_logger', '~> 4.17'
+gem 'semantic_logger', '~> 5.1'
 
 # ====================================
 # Ruby Standard Library Compatibility
@@ -79,7 +79,7 @@ group :development do
   gem 'debug', require: false
   gem 'rackup'
   gem 'rerun', '~> 0.14'
-  gem 'rubocop', '~> 1.89.0', require: false
+  gem 'rubocop', '~> 1.90.0', require: false
   gem 'rubocop-performance', require: false
   gem 'rubocop-rspec', require: false
   gem 'rubocop-sequel', require: false
