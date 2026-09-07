@@ -170,7 +170,7 @@ module RodauthAdmin
     QueryFailure = Data.define(:reason, :page)
     private_constant :Page, :QueryFailure
 
-    # rubocop:disable Metrics/ClassLength -- see the module note above.
+    # rubocop:disable-next Metrics/ClassLength -- see the module note above.
     class << self
       # @param id [Integer, String] the accounts.id
       # @param now [Time, nil] the clock for every expiry comparison;
@@ -572,7 +572,6 @@ module RodauthAdmin
                      per_page: per_page, total: nil, rows: [].freeze).freeze
       end
     end
-    # rubocop:enable Metrics/ClassLength
   end
   # rubocop:enable Metrics/ModuleLength
 end

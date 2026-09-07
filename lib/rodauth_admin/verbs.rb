@@ -182,7 +182,7 @@ module RodauthAdmin
     # in" cookie walks back in after every revoke.
     SESSION_TABLES = %i[account_active_session_keys account_remember_keys].freeze
 
-    # rubocop:disable Metrics/ClassLength -- see the module note above.
+    # rubocop:disable-next Metrics/ClassLength -- see the module note above.
     class << self
       # Rodauth's own unlock_account is exactly this pair of deletes
       # (remove_lockout_metadata, rodauth 2.47.0 features/lockout.rb:292),
@@ -408,7 +408,7 @@ module RodauthAdmin
         raise OperatorTarget, "#{action} is refused on another operator's account"
       end
 
-      # rubocop:disable Metrics/ParameterLists -- the audit contract, spelled out.
+      # rubocop:disable-next Metrics/ParameterLists -- the audit contract, spelled out.
       def record(action, account, actor, reason, counts, metadata, db)
         Audit.record(
           db: db, action: action.to_s, reason: reason,
@@ -418,7 +418,6 @@ module RodauthAdmin
           metadata: metadata.merge(counts: counts)
         )
       end
-      # rubocop:enable Metrics/ParameterLists
 
       # The refusal's own row, written after the verb's transaction has
       # rolled back and before the error reaches the web layer: a refused
@@ -426,7 +425,7 @@ module RodauthAdmin
       # transaction, on the same connection, so it commits on its own.
       # Recorded even when the account was never resolved (a refusal that
       # raced a deletion), hence the nil-safe target.
-      # rubocop:disable Metrics/ParameterLists -- the audit contract, again.
+      # rubocop:disable-next Metrics/ParameterLists -- the audit contract, again.
       def record_refusal(action, account, actor, reason, error, db)
         db.transaction do
           Audit.record(
@@ -438,7 +437,6 @@ module RodauthAdmin
           )
         end
       end
-      # rubocop:enable Metrics/ParameterLists
 
       def identity_row(db, account_id, identity_id)
         row = db[:account_identities].where(id: identity_id, account_id: account_id)
@@ -563,7 +561,6 @@ module RodauthAdmin
                     account_id: account_id, counts: nil, identities: nil).freeze
       end
     end
-    # rubocop:enable Metrics/ClassLength
   end
   # rubocop:enable Metrics/ModuleLength
 end

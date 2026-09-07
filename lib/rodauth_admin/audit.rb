@@ -42,7 +42,7 @@ module RodauthAdmin
     # @param target_account_id [Integer, nil] authdb accounts.id acted on
     # @param target [String, nil] display handle for the target (email/extid)
     # @param metadata [Hash, nil] anything else worth keeping, stored as JSON
-    # rubocop:disable Metrics/ParameterLists
+    # rubocop:disable-next Metrics/ParameterLists
     def record(action:, actor:, reason: nil, actor_account_id: nil, target_account_id: nil, target: nil,
                ip: nil, user_agent: nil, metadata: nil, db: Database.app)
       action = action.to_s
@@ -62,7 +62,6 @@ module RodauthAdmin
         metadata: metadata && JSON.generate(metadata)
       )
     end
-    # rubocop:enable Metrics/ParameterLists
 
     def recent(limit: 50, db: Database.app)
       db[TABLE].reverse(:at, :id).limit(limit).all

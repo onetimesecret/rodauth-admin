@@ -138,11 +138,10 @@ module RodauthAdmin
 
       private
 
-      # rubocop:disable ThreadSafety/ClassInstanceVariable -- guarded by MUTEX
+      # rubocop:disable-next ThreadSafety/ClassInstanceVariable -- guarded by MUTEX
       def connections
         @connections ||= {}
       end
-      # rubocop:enable ThreadSafety/ClassInstanceVariable
 
       def connection(key)
         MUTEX.synchronize { connections[key] ||= yield }
