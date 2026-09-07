@@ -41,6 +41,8 @@ target and production grants are not yet applied.
   verbs: the guard chain per request, the transaction-with-audit rule, the
   self-target rule, the two tenant-side dependencies, and what is
   deliberately not a verb.
+- [`docs/decisions/`](docs/decisions/) — ADRs; 0001 is why this is a
+  standalone process behind an SSH tunnel, never a mount in the tenant app.
 - [`docs/design/quality-gates.md`](docs/design/quality-gates.md) — what runs
   where: editor, pre-commit, pre-push, CI, branch rule; and what is
   deliberately not gated.
