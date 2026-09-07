@@ -15,6 +15,9 @@ module RodauthAdmin
   #   ADMIN_DATABASE_URL             runtime "app" user: the Rodauth login
   #                                  path plus the admin's own tables
   #   ADMIN_DATABASE_URL_RO          read-only user: every admin query
+  #   ADMIN_DATABASE_URL_VERBS       mutation user: the Phase 4 verbs and
+  #                                  the admin_actions row each one commits
+  #                                  in the same transaction
   #   ADMIN_DATABASE_URL_MIGRATIONS  the tenant app's existing migrator,
   #                                  used only by `rake db:migrate` offline
   module Env
@@ -43,6 +46,14 @@ module RodauthAdmin
     # Read-only user: every admin query.
     def database_url_ro
       presence(ENV.fetch('ADMIN_DATABASE_URL_RO', nil)) || dev_default('ADMIN_DATABASE_URL_RO', DEV_DATABASE_URL)
+    end
+
+    # Mutation user: the Phase 4 verbs (CHARTER §4/§6 item 4) and nothing
+    # else. A separate credential rather than a widened read-only role, so a
+    # role named _ro can never DELETE and every read screen keeps running
+    # without mutation privilege (docs/design/database-credentials.md).
+    def database_url_verbs
+      presence(ENV.fetch('ADMIN_DATABASE_URL_VERBS', nil)) || dev_default('ADMIN_DATABASE_URL_VERBS', DEV_DATABASE_URL)
     end
 
     # The existing migrator (the tenant app's AUTH_DATABASE_URL_MIGRATIONS
@@ -114,6 +125,7 @@ module RodauthAdmin
     def validate!
       database_url
       database_url_ro
+      database_url_verbs
       session_secret
       auth_secret
       public_host

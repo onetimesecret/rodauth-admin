@@ -71,6 +71,7 @@ test_env() {
     # -u before any assignment: BSD env rejects the other order.
     env -u ADMIN_DATABASE_URL \
         -u ADMIN_DATABASE_URL_RO \
+        -u ADMIN_DATABASE_URL_VERBS \
         -u ADMIN_DATABASE_URL_MIGRATIONS \
         -u RODAUTH_ADMIN_ALLOW_DESTRUCTIVE_SPECS \
         RACK_ENV=test "$@"

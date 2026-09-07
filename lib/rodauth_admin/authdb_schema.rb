@@ -112,9 +112,8 @@ module RodauthAdmin
       require 'sequel/extensions/migration'
       migration = Sequel.migration do
         up do
-          # rubocop:disable Security/Eval
+          # rubocop:disable-next Security/Eval
           eval(code, binding, __FILE__, __LINE__)
-          # rubocop:enable Security/Eval
         end
       end
       migration.apply(db, :up)

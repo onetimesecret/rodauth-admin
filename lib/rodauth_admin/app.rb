@@ -14,6 +14,7 @@ require_relative 'auth'
 require_relative 'stats'
 require_relative 'account_list'
 require_relative 'account_detail'
+require_relative 'verb_routes'
 
 module RodauthAdmin
   # rubocop:disable Metrics/ClassLength -- one routing tree plus the view
@@ -46,6 +47,11 @@ module RodauthAdmin
     end
     plugin :halt
     plugin :rodauth, auth_class: RodauthAdmin::Auth
+
+    # The mutation verbs' routes and view helpers (CHARTER §6 phase 4).
+    # Included after the plugins so their instance methods are already in
+    # place; nothing here overrides a plugin method.
+    include RodauthAdmin::VerbRoutes
 
     plugin :not_found do
       view(content: '<h1>Not found</h1>')
@@ -119,6 +125,14 @@ module RodauthAdmin
                                              per_page: r.params['per_page'] || AccountDetail::PER_PAGE_DEFAULT)
           view 'account'
         end
+      end
+
+      # Everything that changes something (CHARTER §6 phase 4). Reached
+      # only after the read-only GET above has declined the path: it
+      # matches /accounts/:id exactly, so a bare account page never gets
+      # here and a verb slug never reaches it.
+      r.on 'accounts', Integer do |id|
+        verb_routes(r, id)
       end
 
       # The lookup, and the inbound deep link from the colonel console
@@ -238,7 +252,8 @@ module RodauthAdmin
     def health
       checks = {
         app: probe { Database.app.test_connection },
-        readonly: probe { Database.readonly.test_connection }
+        readonly: probe { Database.readonly.test_connection },
+        verbs: probe { Database.verbs.test_connection }
       }
       ok = checks.values.all?('ok')
       response.status = ok ? 200 : 503

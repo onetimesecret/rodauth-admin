@@ -14,6 +14,11 @@
 %>
 <% if @detail.available %>
   <% a = @detail.account %>
+  <%# The two verbs refused on any operator's account (Verbs::SELF_REFUSED,
+      raised as SelfTarget or OperatorTarget) are not shown here at all: a
+      button that always answers 403 is noise. The verb layer re-checks both
+      inside its own transaction; this only decides what to render. %>
+  <% operator_target = rodauth.session_value == a.id || operator_account?(a.id) %>
   <h2>Account <code><%= a.id %></code></h2>
 
   <h3>Identity &amp; status</h3>
@@ -57,6 +62,8 @@
     </dl>
   <% end %>
 
+  <p class="actions"><a href="<%= verb_path(a.id, 'clear-lockout') %>">Clear lockout</a></p>
+
   <h3>MFA inventory</h3>
   <% mfa = @detail.mfa %>
   <dl>
@@ -99,6 +106,16 @@
     </table>
   <% end %>
   <p class="footnote">Public keys are never selected or shown.</p>
+  <% unless operator_target %>
+    <p class="actions">
+      <a href="<%= verb_path(a.id, 'disable-mfa') %>">Disable MFA</a>
+      <% if mfa.otp.present || !mfa.webauthn_keys.empty? %>
+        <a href="<%= verb_path(a.id, 'regenerate-recovery-codes') %>">Regenerate recovery codes</a>
+      <% else %>
+        <span class="footnote">Regenerate recovery codes &mdash; unavailable: no second factor to back up.</span>
+      <% end %>
+    </p>
+  <% end %>
 
   <h3>Sessions</h3>
   <% sessions = @detail.sessions %>
@@ -122,6 +139,8 @@
   <p class="footnote">Active session keys, not users online: Rodauth keeps the rows until its inactivity cleanup runs.
     Session ids are shown truncated &mdash; they are bearer-ish identifiers.</p>
 
+  <p class="actions"><a href="<%= verb_path(a.id, 'revoke-sessions') %>">Revoke sessions</a></p>
+
   <h3>API refresh tokens</h3>
   <% tokens = @detail.refresh_tokens %>
   <% if tokens.rows.empty? %>
@@ -143,6 +162,8 @@
     <p class="footnote">total <%= tokens.total %>. The token keys themselves are never selected.</p>
   <% end %>
 
+  <p class="actions"><a href="<%= verb_path(a.id, 'revoke-refresh-keys') %>">Revoke API refresh tokens</a></p>
+
   <h3>Pending tokens</h3>
   <table>
     <tr><th>Type</th><th>Present</th><th>Deadline / requested</th><th>Expired</th><th>Email last sent</th><th>New login</th></tr>
@@ -160,17 +181,20 @@
   <p class="footnote">A verification key carries <code>requested_at</code> and no deadline, so &ldquo;expired&rdquo; has
     no answer for it and stays &mdash;. Every token <code>key</code> column is never selected.</p>
 
+  <p class="actions"><a href="<%= verb_path(a.id, 'expire-tokens') %>">Expire pending tokens</a></p>
+
   <h3>SSO identities</h3>
   <% if @detail.identities.empty? %>
     <p>No SSO identities.</p>
   <% else %>
     <table>
-      <tr><th>Provider</th><th>Issuer</th><th>Uid</th></tr>
+      <tr><th>Provider</th><th>Issuer</th><th>Uid</th><th></th></tr>
       <% @detail.identities.each do |identity| %>
         <tr>
           <td><%= identity.provider %></td>
           <td><code><%= identity.issuer.to_s.empty? ? '—' : identity.issuer %></code></td>
           <td><code><%= identity.uid %></code></td>
+          <td><a href="<%= verb_path(a.id, 'unlink-identity', identity.id) %>">Unlink</a></td>
         </tr>
       <% end %>
     </table>
@@ -185,6 +209,8 @@
   </dl>
   <p class="footnote">Reuse history is a count only, never the hashes: no password hash is selected anywhere on this
     page.</p>
+
+  <p class="actions"><a href="<%= verb_path(a.id, 'force-password-reset') %>">Force password reset</a></p>
 
   <h3>Auth timeline</h3>
   <% if @timeline.nil? || !@timeline.available %>

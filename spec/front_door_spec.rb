@@ -26,7 +26,7 @@ RSpec.describe RodauthAdmin::App do
     expect(last_response.status).to eq(200)
     body = JSON.parse(last_response.body)
     expect(body['status']).to eq('ok')
-    expect(body['checks']).to eq('app' => 'ok', 'readonly' => 'ok')
+    expect(body['checks']).to eq('app' => 'ok', 'readonly' => 'ok', 'verbs' => 'ok')
   end
 
   it 'turns away a valid production account that is not allowlisted, and records it' do
@@ -114,9 +114,18 @@ RSpec.describe RodauthAdmin::App do
 
     login!
     expect(last_response).to be_redirect
+    # app.rb calls require_authentication and require_two_factor_setup, not
+    # require_two_factor_authenticated; it does not need to. rodauth 2.47.0's
+    # two_factor_base overrides require_authentication to call
+    # require_two_factor_authenticated whenever the session is
+    # two_factor_partially_authenticated? (features/two_factor_base.rb:132),
+    # so an account with TOTP enrolled cannot reach a read screen on a
+    # password alone. This is the example that holds that true.
     get '/'
     expect(last_response).to be_redirect
     expect(last_response.location).to end_with('/otp-auth'), 'password alone must not open the door'
+    get "/accounts/#{account_id}"
+    expect(last_response.location).to end_with('/otp-auth'), 'nor any other read screen'
 
     form_post '/otp-auth', otp: ROTP::TOTP.new(secret).now
     expect(last_response).to be_redirect
