@@ -64,7 +64,11 @@ how an existing deployment picks up the Phase 4 role (`rodauth_admin_verbs`)
 and the grants added with it. A role that already exists is left alone,
 password included (the file prints a NOTICE and moves on; rotating a
 password is a separate `ALTER ROLE`), and every GRANT is a no-op the second
-time. `test-postgres` applies the file twice for exactly this reason.
+time. The same re-run is also how a privilege is *withdrawn*: the file
+REVOKEs the lockout-table DML that Phase 1 gave `rodauth_admin_app` (the
+lockout feature is no longer enabled on the admin instance), which is a
+no-op on a fresh database and the fix on an existing one. `test-postgres`
+applies the file twice for exactly this reason.
 
 On PostgreSQL 14 and earlier, schema `public` grants CREATE to PUBLIC by
 default, and the file deliberately does not revoke it: that is a
