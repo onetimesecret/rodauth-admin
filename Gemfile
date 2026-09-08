@@ -3,7 +3,7 @@
 # frozen_string_literal: true
 
 # Derived from onetimesecret/onetimesecret Gemfile (2026-09-04): same
-# framework line (Roda 3, Rodauth 2, rodauth-tools 0.4, Sequel 5, Ruby 3.4)
+# framework line (Roda 3, Rodauth 2, rodauth-tools 0.4, Sequel 5, Ruby 3.3)
 # so idioms and eventually code transfer, minus everything that belongs to
 # the tenant app (Familia/Redis, Otto, RabbitMQ, Stripe, OmniAuth, Vue).
 #
@@ -11,7 +11,11 @@
 # The gem set is deliberately small: this is the tool that holds the keys,
 # and every dependency here is one more thing to audit.
 
-ruby file: '.ruby-version'
+# Constraint, not `file: '.ruby-version'`: the Debian 13 (Trixie) target runs
+# whatever 3.3.x the system packages, which need not match the patch pinned
+# for local dev and CI. Any 3.3 satisfies bundler; .ruby-version still drives
+# the toolchain.
+ruby '~> 3.3.0'
 
 source 'https://rubygems.org/'
 
