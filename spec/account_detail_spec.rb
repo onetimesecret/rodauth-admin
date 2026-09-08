@@ -191,6 +191,12 @@ RSpec.describe RodauthAdmin::App do
       expect(body).to include('no answer for it')
     end
 
+    # Pins the main repo's route: src/apps/admin/routes.ts declares
+    # `/colonel/customers/:id` with :id the customer's extid. That table is
+    # not visible from here, so this literal is the contract. If the console
+    # renames the route, change App#colonel_customer_url and this string
+    # together. The counterpart (their pin of our /account?q= deep link) is
+    # spec/unit/onetime/rodauth_admin_spec.rb in onetimesecret/onetimesecret.
     it 'deep-links the external id to the colonel console when one is configured' do
       allow(RodauthAdmin::Env).to receive(:colonel_console_url).and_return('https://console.example.com')
       id = seed_full!
@@ -280,25 +286,57 @@ RSpec.describe RodauthAdmin::App do
       expect(last_response.body).to include('Exact match only')
     end
 
-    it 'redirects an email to that account page' do
+    it 'redirects a posted email to that account page' do
       id = seed_full!
       sign_in_operator!
-      get '/account?q=subject@example.com'
+      form_post '/account', q: 'subject@example.com'
       expect(last_response.status).to eq(302)
       expect(last_response.location).to end_with("/accounts/#{id}")
     end
 
-    it 'redirects an external id to that account page' do
+    it 'redirects a posted external id to that account page' do
+      id = seed_full!
+      sign_in_operator!
+      form_post '/account', q: 'extid-subject'
+      expect(last_response.location).to end_with("/accounts/#{id}")
+    end
+
+    # The colonel console's deep link (onetimesecret/onetimesecret
+    # lib/onetime/rodauth_admin.rb#account_url, pinned there in
+    # spec/unit/onetime/rodauth_admin_spec.rb) is a GET carrying the extid.
+    it 'redirects the GET deep link with an external id to that account page' do
       id = seed_full!
       sign_in_operator!
       get '/account?q=extid-subject'
+      expect(last_response.status).to eq(302)
       expect(last_response.location).to end_with("/accounts/#{id}")
+    end
+
+    # An email is personal data, and a query string lands in browser history
+    # and in every access log on the way here. The console never sends one,
+    # so a GET carrying an address is hand-typed: show the form instead.
+    it 'declines an email on the GET deep link and offers the form' do
+      seed_full!
+      sign_in_operator!
+      get '/account?q=subject@example.com'
+      expect(last_response.status).to eq(200)
+      expect(last_response.body).to include('Email lookups go through this form')
+      expect(last_response.body).to include('<form method="post" action="/account">')
+      expect(last_response.body).not_to include('subject@example.com'), 'the address is not reflected back'
+    end
+
+    it 'rejects a lookup POST without a CSRF token' do
+      seed_full!
+      sign_in_operator!
+      post '/account', q: 'subject@example.com'
+      expect(last_response).to be_redirect
+      expect(last_response.location).to end_with('/login')
     end
 
     it 'folds case on the email' do
       id = seed_full!
       sign_in_operator!
-      get '/account?q=SUBJECT@Example.COM'
+      form_post '/account', q: 'SUBJECT@Example.COM'
       expect(last_response.location).to end_with("/accounts/#{id}")
     end
 
@@ -310,7 +348,7 @@ RSpec.describe RodauthAdmin::App do
       open_id = authdb[:accounts].insert(email: 'dupe@example.com', status_id: 2, external_id: 'extid-open')
 
       sign_in_operator!
-      get '/account?q=dupe@example.com'
+      form_post '/account', q: 'dupe@example.com'
       expect(last_response.status).to eq(200)
       expect(last_response.body).to include('More than one account matches')
       expect(last_response.body).to include("href=\"/accounts/#{open_id}\">#{open_id}</a>")
@@ -324,7 +362,7 @@ RSpec.describe RodauthAdmin::App do
       open_id = authdb[:accounts].insert(email: 'dupe@example.com', status_id: 2, external_id: 'extid-open')
 
       sign_in_operator!
-      get '/account?q=dupe@example.com'
+      form_post '/account', q: 'dupe@example.com'
       body = last_response.body
       expect(body.index("/accounts/#{open_id}")).to be < body.index("/accounts/#{closed}")
     end
@@ -332,7 +370,7 @@ RSpec.describe RodauthAdmin::App do
     it 'renders the degraded panel, still 200, when the lookup cannot reach the authdb' do
       sign_in_operator!
       allow(RodauthAdmin::AccountDetail).to receive(:lookup).and_return(unavailable_lookup)
-      get '/account?q=subject@example.com'
+      form_post '/account', q: 'subject@example.com'
       expect(last_response.status).to eq(200)
       expect(last_response.body).to include('This lookup is unavailable')
       expect(last_response.body).to include('Sequel::DatabaseConnectionError: could not connect')
@@ -341,11 +379,18 @@ RSpec.describe RodauthAdmin::App do
 
     it 'answers a query nothing matches with a 404 that claims a real miss' do
       sign_in_operator!
-      get '/account?q=nobody@example.com'
+      form_post '/account', q: 'nobody@example.com'
       expect(last_response.status).to eq(404)
       expect(last_response.body).to include('No account matches')
       expect(last_response.body).to include('nobody@example.com')
       expect(last_response.body).to include('not an unreachable database')
+    end
+
+    it 'answers a deep link to an unknown external id with the same 404' do
+      sign_in_operator!
+      get '/account?q=extid-nobody'
+      expect(last_response.status).to eq(404)
+      expect(last_response.body).to include('extid-nobody')
     end
 
     # The query is operator input rendered back into HTML.
@@ -368,7 +413,8 @@ RSpec.describe RodauthAdmin::App do
     it 'offers the lookup form in the nav once signed in' do
       sign_in_operator!
       get '/'
-      expect(last_response.body).to include('<form method="get" action="/account">')
+      expect(last_response.body).to include('<form method="post" action="/account">')
+      expect(last_response.body).to include('name="_csrf"')
     end
   end
 

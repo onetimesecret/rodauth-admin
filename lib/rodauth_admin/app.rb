@@ -135,21 +135,49 @@ module RodauthAdmin
         verb_routes(r, id)
       end
 
-      # The lookup, and the inbound deep link from the colonel console
-      # (/account?q=<external_id>). A single hit redirects rather than
-      # rendering, so the operator lands on the canonical /accounts/<id>
-      # URL and can bookmark or share it. Three other outcomes are kept
-      # apart: several matches disambiguate on their own page, a miss is now
-      # genuinely a miss (the authdb answered and has nothing), and an
-      # unreachable authdb is the degraded panel, never a 404.
-      r.get 'account' do
-        q = r.params['q']
-        # ?q[]=x arrives as an Array. Nothing but a String can be an email
-        # or an external_id, so it is the empty query, not a 500.
-        q = nil unless q.is_a?(String)
-        next view 'lookup' if q.nil? || q.strip.empty?
+      # The lookup. Two routes into one resolver:
+      #
+      #   GET  /account?q=<external_id>  the inbound deep link from the colonel
+      #                                  console. The main repo builds this URL
+      #                                  in lib/onetime/rodauth_admin.rb and pins
+      #                                  its shape in spec/unit/onetime/
+      #                                  rodauth_admin_spec.rb; renaming it here
+      #                                  breaks that test, which is the point.
+      #   POST /account  q=<anything>    the search box. An email is personal
+      #                                  data, and a query string lands in
+      #                                  browser history and every access log
+      #                                  between the operator and this process,
+      #                                  so typed lookups travel in the body.
+      #
+      # The GET refuses an email for the same reason: the console only ever
+      # sends an external id, so an address in the URL is a hand-typed one,
+      # and the form is where that goes.
+      #
+      # A single hit redirects rather than rendering, so the operator lands
+      # on the canonical /accounts/<id> URL and can bookmark or share it.
+      # Three other outcomes are kept apart: several matches disambiguate on
+      # their own page, a miss is genuinely a miss (the authdb answered and
+      # has nothing), and an unreachable authdb is the degraded panel, never
+      # a 404.
+      r.is 'account' do
+        r.get do
+          q = lookup_query(r)
+          next view 'lookup' if q.nil?
 
-        resolve_lookup(r, q)
+          if q.include?('@')
+            @email_in_url = true
+            next view 'lookup'
+          end
+
+          resolve_lookup(r, q)
+        end
+
+        r.post do
+          q = lookup_query(r)
+          next view 'lookup' if q.nil?
+
+          resolve_lookup(r, q)
+        end
       end
     end
 
@@ -158,6 +186,14 @@ module RodauthAdmin
     # A deep link to the tenant colonel console (CHARTER §4 seam 1), which
     # exists only when both halves are configured: an unset console URL or an
     # orphan row renders as plain text instead.
+    #
+    # The path is the main repo's Vue route `/colonel/customers/:id`
+    # (src/apps/admin/routes.ts), where :id is the customer's extid, which is
+    # this row's external_id. Neither repo can see the other's route table,
+    # so each pins the other's URL shape in a test: ours is in
+    # spec/account_detail_spec.rb ("deep-links the external id"); theirs, for
+    # our /account?q= route, is spec/unit/onetime/rodauth_admin_spec.rb. A
+    # rename on either side fails a test instead of shipping dead links.
     def colonel_customer_url(external_id)
       base = Env.colonel_console_url
       return nil if base.nil? || external_id.nil? || external_id.to_s.empty?
@@ -205,6 +241,16 @@ module RodauthAdmin
     # links carry per_page and nothing else.
     def timeline_path(id, page, per_page)
       "#{account_path(id)}?page=#{page}&per_page=#{per_page}"
+    end
+
+    # The q parameter as a String, or nil when there is nothing to look up.
+    # ?q[]=x arrives as an Array. Nothing but a String can be an email or an
+    # external_id, so it is the empty query, not a 500.
+    def lookup_query(req)
+      q = req.params['q']
+      return nil unless q.is_a?(String)
+
+      q.strip.empty? ? nil : q
     end
 
     # One query, four answers. The order matters: an unreachable authdb is
