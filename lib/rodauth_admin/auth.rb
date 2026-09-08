@@ -11,7 +11,7 @@ require_relative 'allowlist'
 require_relative 'audit'
 
 module RodauthAdmin
-  # The admin's own front door, over the operator's existing production
+  # The admin's own sign-in, over the operator's existing production
   # identity (CHARTER §4). This Rodauth instance authenticates against the
   # production accounts table through the login-scoped credential and
   # enables only what a sign-in needs:
@@ -29,7 +29,7 @@ module RodauthAdmin
   #
   # Deliberately NOT enabled: create_account, verify_account, reset_password,
   # change_password, close_account, remember, active_sessions (see charter),
-  # recovery_codes (the tenant app owns recovery; the admin door is TOTP only),
+  # recovery_codes (the tenant app owns recovery; the admin sign-in is TOTP only),
   # webauthn (Phase 1 keeps one second factor; revisit when an operator
   # without TOTP shows up), and lockout (CHARTER §4, revision 5). The
   # counters are the tenant's, so with lockout on here a bad password at
@@ -88,7 +88,7 @@ module RodauthAdmin
       login_column :email
       login_label 'Email'
       normalize_login { |login| login.to_s.unicode_normalize(:nfc).strip.downcase }
-      # Only Verified accounts (status 2) may pass the door.
+      # Only Verified accounts (status 2) may sign in.
       skip_status_checks? false
 
       # --- TOTP --------------------------------------------------------------
@@ -100,7 +100,7 @@ module RodauthAdmin
       two_factor_auth_return_to_requested_location? true
       # enable :otp routes otp-auth, otp-setup AND otp-disable. The last one
       # would strip TOTP from the shared production identity through the
-      # admin door (and the runtime role is denied DELETE on
+      # admin (and the runtime role is denied DELETE on
       # account_otp_keys, db/grants/postgres/rodauth_admin_roles.sql).
       otp_disable_route nil
       # two_factor_base (pulled in by otp) routes multifactor-manage and

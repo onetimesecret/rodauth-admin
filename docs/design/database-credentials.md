@@ -34,7 +34,7 @@ they never collide with the tenant app's `schema_info`.
   matters is between *runtime DML* and *DDL*, and between *writing* and
   *reading*, and both are kept.
 - **A separate read-only user is kept, and stays read-only.** Every admin
-  screen from Phase 2 reads through it, and the login door's credential
+  screen from Phase 2 reads through it, and the sign-in's credential
   never grows.
 
 ### Phase 4 revision (2026-09-05): a third runtime credential, not a wider `_ro`
