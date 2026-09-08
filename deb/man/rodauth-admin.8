@@ -1,0 +1,322 @@
+.TH RODAUTH-ADMIN 8 "2026-09-07" "rodauth-admin 0.1.0" "System Administration"
+.SH NAME
+rodauth-admin \- operator CLI for the Rodauth Admin service
+.SH SYNOPSIS
+.B rodauth-admin install-gems
+.br
+.B rodauth-admin seal
+.I NAME
+.br
+.B rodauth-admin check
+.br
+.B rodauth-admin migrate
+.br
+.B rodauth-admin rake \-\-
+.I TASK
+.RI [ ARG ...]
+.SH DESCRIPTION
+Runs as root.
+Commissions and operates
+.BR rodauth-admin.service ,
+a single standalone Puma process serving the admin console on
+.B 127.0.0.1:9292
+and reached over an SSH tunnel:
+.PP
+.RS
+.nf
+ssh \-L 9292:127.0.0.1:9292 \fIhost\fR
+.fi
+.RE
+.PP
+then
+.IR http://localhost:9292 .
+.PP
+Everything that needs the application's secrets runs in a transient unit
+.RB ( systemd-run (1)),
+not in the calling shell, so the credential plumbing is exactly the one
+the packaged unit uses: systemd decrypts as root, mounts the values 0400
+under
+.BR $CREDENTIALS_DIRECTORY ,
+and drops to the
+.B rodauth-admin
+uid before exec.
+No secret passes through this program's environment or argv.
+.SS install-gems
+Installs the gems named by the shipped
+.I Gemfile.lock
+into the system Ruby's gem directory
+.RI ( /var/lib/gems/3.3.0 ),
+as root.
+Refuses with exit 69 if
+.BR gcc ,
+.B make
+or the Ruby headers are missing \(em
+.BR argon2 ,
+.BR puma ,
+.BR nio4r ,
+.BR bcrypt ,
+.B json
+and
+.B bigdecimal
+are compiled on the host.
+Run by
+.B postinst
+on install and upgrade, and re-runnable by hand after fixing a failed
+build.
+.SS seal NAME
+Seals one of the six secrets into the encrypted credential store.
+.I NAME
+must be one of the six listed under
+.B ENVIRONMENT
+below; anything else is exit 64.
+The value is read from standard input when that is not a terminal, and
+otherwise prompted for with
+.RB ( read " " \-rs )
+and never echoed.
+It is written with
+.B "printf '%s'"
+into
+.BR "systemd-creds encrypt \-\-with\-key=host \-\-name=" NAME,
+under
+.BR "umask 077" ,
+producing
+.IR /etc/credstore.encrypted/rodauth\-admin. NAME .cred .
+Sealing again replaces the file; restart the service afterwards.
+.SS check
+Preflight.
+Echoes each probe as
+.RB \(lq "+ " command \(rq
+and prints one
+.RB \(lq "ok: " ... \(rq
+or
+.RB \(lq "FAIL: " ... \(rq
+line per probe, exiting non-zero on the first
+.BR FAIL .
+In order: Ruby is 3.3.x; the
+.B rodauth-admin
+user exists;
+.I /var/lib/rodauth-admin
+exists;
+.B "bundle check \-\-dry\-run"
+passes
+.I as the service user;
+each of the six credential files is present and decryptable on this
+host; at least one drop-in exists under
+.IR /etc/systemd/system/rodauth\-admin.service.d ;
+.B systemd-analyze verify
+accepts the unit; and finally a transient unit carrying all six sealed
+credentials runs
+.B RodauthAdmin.boot!
+so the application's own schema and secret checks run before
+.B systemctl start
+does.
+Exit 0 means the service is ready to start.
+.SS migrate
+Prompts for
+.B ADMIN_DATABASE_URL_MIGRATIONS
+(or reads it from standard input), writes it 0600 root to
+.I /run/rodauth-admin/migrations-url
+on the tmpfs, and runs
+.B rake db:migrate
+in a transient unit with
+.BI LoadCredential=ADMIN_DATABASE_URL_MIGRATIONS: that\ file
+\(em systemd reads the source as root before dropping to the uid, so the
+file need not be sealed.
+A
+.B trap
+removes it on every exit path.
+.B SetCredential=
+is deliberately not used: it puts the value in the unit's properties, and
+so on the D-Bus wire and in
+.BR "systemctl show" .
+The migration credential is never sealed onto the host and the running
+service never holds it.
+.SS rake \-\- TASK [ARG...]
+Runs a rake task in a transient unit carrying the six sealed credentials:
+.BR operators:add[ EMAIL ]\ REASON=... ,
+.BR operators:list ,
+.BR audit:recent ,
+.BR authdb:status .
+.B USER
+is passed as
+.BR ${SUDO_USER:-$USER} ,
+which is what the Rakefile records as the audit actor.
+The
+.B \-\-
+is required, so a task with switches survives argument parsing intact.
+.SH FILES
+.TP
+.I /usr/lib/systemd/system/rodauth-admin.service
+The service unit. Never edit it; use a drop-in.
+.TP
+.I /etc/systemd/system/rodauth-admin.service.d/10-authdb.conf
+Per-host drop-in, written by the operator. The unit sets
+.B IPAddressDeny=any
+with only
+.B localhost
+allowed, so the authdb address must be allowed here:
+.PP
+.RS
+.nf
+[Service]
+IPAddressAllow=\fI10.0.0.5\fR/32
+.fi
+.RE
+.TP
+.IR /etc/credstore.encrypted/rodauth\-admin. NAME .cred
+The six sealed secrets, 0600 root, in a directory shared with other
+packages (0700 root, created by this package's tmpfiles.d fragment,
+removed by none).
+.TP
+.I /usr/share/rodauth-admin
+The application: an allowlist of
+.IR config.ru ", " config/ ", " lib/ ", " views/ ", " db/ ", " Gemfile ", " Gemfile.lock ", " Rakefile
+and a generated
+.IR .bundle/config .
+Read-only to the service.
+.TP
+.I /var/lib/rodauth-admin
+State directory, 0750, and
+.B HOME
+for the service and its transient units. Bundler wants a writable home;
+the application writes nothing here.
+.TP
+.I /run/rodauth-admin/migrations-url
+Exists only for the duration of one
+.BR migrate .
+.TP
+.I /usr/lib/rodauth-admin/with-credentials
+The exec wrapper that turns
+.B $CREDENTIALS_DIRECTORY
+files into environment variables.
+.SH ENVIRONMENT
+The six variables the service holds, each from a sealed credential of the
+same name:
+.TP
+.B RODAUTH_ADMIN_SESSION_SECRET
+Rack session secret.
+.TP
+.B AUTH_SECRET
+Rodauth's HMAC secret.
+.TP
+.B ARGON2_SECRET
+Argon2 pepper for password hashing.
+.TP
+.B ADMIN_DATABASE_URL
+Read/write connection for the admin's own tables.
+.TP
+.B ADMIN_DATABASE_URL_RO
+Read-only connection used for lookups.
+.TP
+.B ADMIN_DATABASE_URL_VERBS
+Connection for the verb-code role.
+.PP
+Set by the unit, override with a drop-in:
+.TP
+.B PORT
+Default
+.BR 9292 .
+.TP
+.B RODAUTH_ADMIN_BIND
+Default
+.BR 127.0.0.1 .
+Changing it does not open the service up:
+.B IPAddressDeny=any
+in the unit is the real boundary.
+.TP
+.B RODAUTH_ADMIN_HOST
+Default
+.BR localhost ,
+the hostname the browser sees through the tunnel.
+.PP
+Also set by the unit:
+.B RACK_ENV=production
+and
+.BR HOME=/var/lib/rodauth-admin .
+.B ADMIN_DATABASE_URL_MIGRATIONS
+is used only by
+.BR migrate .
+.SH NOTES
+Values are sealed with
+.B "printf '%s'"
+and read back with
+.BR "$(cat ...)" ,
+so trailing newlines are stripped in both directions and the value the
+application sees is byte-for-byte what was typed.
+Piping a value with
+.BR echo (1)
+therefore also works, but
+.B printf
+is what the CLI does and what the runbook shows.
+.PP
+.B \-\-with\-key=host
+means the sealed files are decryptable only on the host that created
+them: re-imaging the VM, or copying
+.I /etc/credstore.encrypted
+to another machine, invalidates every
+.I .cred
+file. Re-seal all six after a rebuild.
+.B auto
+is deliberately not used \(em it would silently pick TPM2 on a future
+host and make the same files undecryptable in a less obvious way.
+.PP
+The secrets end up in Puma's process environment, so
+.I /proc/<pid>/environ
+holds them, readable by the service user and root only;
+.B ProtectProc=invisible
+hides the process from everyone else.
+That is the price of keeping the application env-var-only, and is still
+better than
+.BR EnvironmentFile= :
+nothing is in cleartext on disk and
+.B systemctl show
+reveals nothing.
+.PP
+The database URLs must use IP literals.
+.B IPAddressDeny=any
+blocks DNS along with everything else, so a hostname in a URL fails to
+resolve at connect time \(em unless the drop-in also allows the
+resolver's address.
+.PP
+Gems installed under
+.I /var/lib/gems
+are not removed on purge; they belong to the system Ruby and may be
+shared. Remove them with
+.BR "gem uninstall" (1)
+if they are not wanted.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 64
+.RB ( EX_USAGE )
+Bad invocation: unknown subcommand, unknown credential name, missing
+.BR \-\- .
+.TP
+.B 69
+.RB ( EX_UNAVAILABLE )
+A prerequisite is missing: not root, no toolchain or Ruby headers, no
+.BR systemd-creds ,
+no credential store directory.
+.TP
+.B 78
+.RB ( EX_CONFIG )
+A configuration problem: an empty value refused by
+.BR seal ,
+or the first failing probe in
+.BR check .
+The unit's
+.B RestartPreventExitStatus=78
+mirrors this: the application exits 78 on a
+.B ConfigurationError
+and systemd does not retry.
+.SH SEE ALSO
+.BR systemd-creds (1),
+.BR systemd-run (1),
+.BR systemd.exec (5),
+.BR systemd.resource-control (5),
+.BR sysusers.d (5),
+.BR tmpfiles.d (5),
+.BR deb-systemd-helper (1p),
+.BR ssh (1)

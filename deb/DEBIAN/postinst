@@ -1,0 +1,61 @@
+#!/bin/sh
+# Modelled on what dh_installsystemd/dh_installtmpfiles/dh_installsysusers
+# generate; see deb-systemd-helper(1p), deb-systemd-invoke(1p).
+set -e
+
+UNIT=rodauth-admin.service
+
+case "$1" in
+  configure|abort-upgrade|abort-deconfigure|abort-remove)
+    # sysusers.d(5)/tmpfiles.d(5) instead of adduser + install -d: the
+    # same declarations apply again at every boot. init-system-helpers is
+    # Essential and systemd is a hard requirement of this package's
+    # design, so no existence guard on the binaries.
+    systemd-sysusers rodauth-admin.conf >/dev/null
+    # || true: on a confext-managed host /etc may be read-only at this
+    # moment, and the credstore line would fail. The directories that
+    # matter are recreated at boot.
+    systemd-tmpfiles --create rodauth-admin.conf >/dev/null || true
+
+    # Deliberately NOT `|| true`. Gems are the difference between an
+    # installed package and a runnable one; a failed native build must
+    # leave the package unconfigured with bundler's output on screen so
+    # the operator sees it, and `apt install -f` retries after the fix.
+    rodauth-admin install-gems
+
+    if [ -d /run/systemd/system ]; then
+      systemctl --system daemon-reload >/dev/null || true
+    fi
+
+    # was-enabled defaults to true, so a first install enables the unit;
+    # on upgrade an admin `systemctl disable rodauth-admin` survives
+    # (autoscripts/postinst-systemd-enable).
+    deb-systemd-helper unmask "$UNIT" >/dev/null || true
+    if deb-systemd-helper --quiet was-enabled "$UNIT"; then
+      deb-systemd-helper enable "$UNIT" >/dev/null || true
+    else
+      deb-systemd-helper update-state "$UNIT" >/dev/null || true
+    fi
+
+    if [ -d /run/systemd/system ]; then
+      if [ -n "$2" ]; then
+        # Upgrade only. try-restart, not restart: a host that has not been
+        # commissioned yet (no sealed credentials) must stay stopped
+        # rather than be started into a fail-closed loop.
+        deb-systemd-invoke try-restart "$UNIT" >/dev/null || true
+      fi
+      # First install starts nothing: the credentials are not sealed and
+      # the schema is not migrated. The line below says what to do.
+    fi
+    ;;
+esac
+
+# Configure-time informational output, first install only. Policy 3.9.1's
+# prompt-to-acknowledge is rejected: installs stay non-interactive. 3.9
+# ("avoid producing output which is unnecessary") is met by printing on
+# the install that creates the service and never again.
+if [ "$1" = configure ] && [ -z "$2" ]; then
+  echo "rodauth-admin is installed but not started: seal the six secrets (rodauth-admin seal NAME), add the authdb drop-in, run rodauth-admin migrate, then rodauth-admin check and systemctl start rodauth-admin"
+fi
+
+exit 0

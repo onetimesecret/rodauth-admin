@@ -1,0 +1,101 @@
+[Unit]
+Description=Rodauth Admin (loopback only; reach it over an SSH tunnel)
+Documentation=man:rodauth-admin(8)
+After=network-online.target
+Wants=network-online.target
+# A fail-closed boot must stop, not loop: 3 tries in 5 minutes, then failed
+# (systemd.unit(5) StartLimitIntervalSec=/StartLimitBurst=).
+StartLimitIntervalSec=5min
+StartLimitBurst=3
+
+[Service]
+# Puma >= 5.1 sends READY=1 itself when NOTIFY_SOCKET is set; the wrapper
+# and `bundle exec` both exec, so the PID systemd watches is Puma's
+# (systemd.service(5) Type=notify).
+Type=notify
+User=rodauth-admin
+Group=rodauth-admin
+WorkingDirectory=/usr/share/rodauth-admin
+# HOME lives here: bundler wants a writable home or it warns on every
+# invocation. The app itself writes nothing (systemd.exec(5)).
+StateDirectory=rodauth-admin
+StateDirectoryMode=0750
+UMask=0077
+
+Environment=RACK_ENV=production
+Environment=RODAUTH_ADMIN_HOST=localhost
+Environment=RODAUTH_ADMIN_BIND=127.0.0.1
+Environment=PORT=9292
+Environment=HOME=/var/lib/rodauth-admin
+
+# Six sealed credentials, one per env var, explicit paths so a missing
+# file fails the unit before ExecStart runs. The --name given to
+# `systemd-creds encrypt` at seal time must equal the credential id here,
+# or decryption fails (systemd.exec(5) LoadCredentialEncrypted=).
+LoadCredentialEncrypted=RODAUTH_ADMIN_SESSION_SECRET:/etc/credstore.encrypted/rodauth-admin.RODAUTH_ADMIN_SESSION_SECRET.cred
+LoadCredentialEncrypted=AUTH_SECRET:/etc/credstore.encrypted/rodauth-admin.AUTH_SECRET.cred
+LoadCredentialEncrypted=ARGON2_SECRET:/etc/credstore.encrypted/rodauth-admin.ARGON2_SECRET.cred
+LoadCredentialEncrypted=ADMIN_DATABASE_URL:/etc/credstore.encrypted/rodauth-admin.ADMIN_DATABASE_URL.cred
+LoadCredentialEncrypted=ADMIN_DATABASE_URL_RO:/etc/credstore.encrypted/rodauth-admin.ADMIN_DATABASE_URL_RO.cred
+LoadCredentialEncrypted=ADMIN_DATABASE_URL_VERBS:/etc/credstore.encrypted/rodauth-admin.ADMIN_DATABASE_URL_VERBS.cred
+# ADMIN_DATABASE_URL_MIGRATIONS is deliberately absent: the running unit
+# never holds the credential that can alter the schema. See
+# `rodauth-admin migrate` in rodauth-admin(8).
+
+# --dry-run: plain `bundle check` re-locks and touches Gemfile.lock, which
+# is under /usr and read-only here (ProtectSystem=strict).
+ExecStartPre=/usr/bin/bundle check --dry-run
+ExecStart=/usr/lib/rodauth-admin/with-credentials /usr/bin/bundle exec puma -C config/puma.rb config.ru
+Restart=on-failure
+RestartSec=10s
+# EX_CONFIG from config.ru on ConfigurationError: a bad or missing secret
+# is never worth a retry (systemd.service(5)).
+RestartPreventExitStatus=78
+TimeoutStartSec=90
+SyslogIdentifier=rodauth-admin
+
+# Hardening (systemd.exec(5); score with `systemd-analyze security`).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# Also hides this process from other users, which matters here: the six
+# secrets are in Puma's environment and therefore in /proc/<pid>/environ.
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+# Off, and verified rather than assumed: the argon2 gem binds libargon2
+# through ffi, and ffi's attach_function builds each method trampoline in
+# a page it maps writable and executable. With W^X enforced the app dies
+# at boot with "function.rb:88:in `attach': RuntimeError" (seen in the
+# e2e on aarch64; the mechanism is the same on x86_64). Ruby itself would
+# be fine (Debian builds ruby3.3 without YJIT). Everything else in the
+# sandbox holds; systemd-analyze security scores this unit 1.4.
+MemoryDenyWriteExecute=no
+# AF_NETLINK: glibc getaddrinfo opens one for address sorting.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+# Loopback enforced at the kernel, not only by Puma's bind. The authdb
+# address is per host and comes from a drop-in (see rodauth-admin(8)):
+#   /etc/systemd/system/rodauth-admin.service.d/10-authdb.conf
+#   [Service]
+#   IPAddressAllow=<authdb ip>/32
+# DNS is blocked too, so the sealed database URLs use IP literals (or the
+# drop-in also allows the resolver).
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

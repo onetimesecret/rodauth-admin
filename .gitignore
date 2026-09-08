@@ -27,3 +27,6 @@ coverage/
 .serena
 .remember/
 .DS_Store
+
+# Built packages
+deb/*.deb

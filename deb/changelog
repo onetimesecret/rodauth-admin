@@ -1,0 +1,25 @@
+rodauth-admin (0.1.0) unstable; urgency=medium
+
+  * Initial package. One standalone Puma process per ADR-0001: loopback
+    bind, reached over `ssh -L`, on a small admin/jump host. No reverse
+    proxy, no shared mount.
+  * Trixie's system Ruby 3.3 is the interpreter (the Gemfile pins
+    `ruby '~> 3.3.0'`). Gems install into /var/lib/gems/3.3.0 from the
+    committed Gemfile.lock, run by postinst so one `apt install` yields a
+    runnable tree; a failed compile leaves the package unconfigured with
+    bundler's output on screen, and `rodauth-admin install-gems` re-runs
+    it after the fix.
+  * Secrets are sealed with systemd-creds (--with-key=host) into
+    /etc/credstore.encrypted and reach the app through
+    /usr/lib/rodauth-admin/with-credentials, which exports one
+    environment variable per credential file and execs Puma. Nothing in
+    lib/ knows about $CREDENTIALS_DIRECTORY; EnvironmentFile=%d/... cannot
+    work, since PID 1 reads env files before the child mounts credentials.
+  * The unit ships enabled but not started: credentials and migrations are
+    absent on a fresh install, and a fail-closed boot should not loop
+    (StartLimitBurst=3 in 5min, RestartPreventExitStatus=78).
+  * ADMIN_DATABASE_URL_MIGRATIONS is deliberately not sealed. It is
+    prompted for by `rodauth-admin migrate`, written 0600 to the /run
+    tmpfs for the length of one transient unit, and removed by a trap.
+
+ -- Delano Mandelbaum <delano@onetimesecret.com>  Mon, 07 Sep 2026 12:00:00 -0700

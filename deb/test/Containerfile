@@ -1,0 +1,34 @@
+FROM docker.io/debian:trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# systemd/systemd-sysv/dbus: PID 1, so the units, transient units and
+#   credential plumbing behave as they do on a host.
+# postgresql + postgresql-client: the authdb the package talks to, and psql
+#   for the grant file and the table assertions.
+# lintian: the package gate inside.sh runs on the freshly built .deb.
+# man-db: `man -w rodauth-admin` resolves the shipped section-8 page.
+# ca-certificates: rubygems.org TLS for the two bundle installs.
+# curl: /healthz. iproute2: `ss -ltn` for the loopback bind assertion.
+# ruby ruby-bundler ruby-dev build-essential libssl-dev: the package's own
+#   Depends:, pre-pulled so `apt install ./x.deb` is a local operation and
+#   the only network the install itself needs is rubygems.org.
+# NOTE: network is required at test time — gems are compiled from the
+# shipped Gemfile.lock by postinst. Nothing is vendored, on purpose.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    systemd systemd-sysv dbus \
+    postgresql postgresql-client \
+    lintian man-db \
+    ca-certificates curl iproute2 \
+    ruby ruby-bundler ruby-dev build-essential libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# The debian image ships a policy-rc.d that answers 101 ("do not start") to
+# every invoke-rc.d/deb-systemd-invoke call, which is exactly what the
+# package's postinst uses on upgrade. A real host has no policy-rc.d; drop
+# it so the upgrade stage sees the service actually restart.
+RUN rm -f /usr/sbin/policy-rc.d
+
+# systemd is PID 1; podman --systemd=always provides the tmpfs mounts
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

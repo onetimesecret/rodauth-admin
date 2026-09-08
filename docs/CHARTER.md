@@ -205,8 +205,10 @@ Read against `00-scope.md` and `10-aggregate-visibility.md`
   offboarding action; see §4 for the session, lockout, and audit
   consequences.
 - **Naming and hosting.** ~~Repo name~~ (resolved: `onetimesecret/rodauth-admin`), ~~whether it deploys beside the app~~ (resolved 2026-09-06: its own process behind an SSH tunnel, never a mount — [ADR-0001](decisions/0001-standalone-process-not-a-mount.md)),
-  whether it deploys beside the app or on separate infrastructure, and how
-  BunnyCDN Shield fronts it.
+  ~~and how it deploys~~ (resolved 2026-09-07: a hand-built .deb on system
+  Ruby 3.3, secrets sealed with systemd-creds —
+  [ADR-0002](decisions/0002-debian-package.md)). Still open: how BunnyCDN
+  Shield fronts it.
 - **Multi-region.** The diagnostics runbook's "check the other regions by
   hand" problem: does Rodauth Admin connect to one authdb per deployment, or
   federate reads across regions? V1 answer should be per-region; note the

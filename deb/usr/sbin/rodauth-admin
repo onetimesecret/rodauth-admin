@@ -1,0 +1,331 @@
+#!/bin/bash
+#
+# rodauth-admin - operator CLI for the Rodauth Admin service.
+#
+# Usage:
+#   rodauth-admin install-gems        install the locked gems as root
+#   rodauth-admin seal NAME           seal one secret into the credstore
+#   rodauth-admin check               preflight; exit 0 means ready to start
+#   rodauth-admin migrate             run db:migrate with a prompted URL
+#   rodauth-admin rake -- ARGS...     run a rake task under the sealed creds
+#
+# Everything that needs the application's secrets runs in a transient unit
+# (systemd-run(1)) rather than in this shell, so the credential plumbing
+# is exactly the one the packaged unit uses: systemd decrypts as root,
+# mounts the values 0400 under $CREDENTIALS_DIRECTORY, and drops to the
+# service uid before exec. No secret ever passes through this process's
+# environment or argv.
+#
+# Exit codes (sysexits.h, as in ots-backup):
+#   64 EX_USAGE        bad invocation
+#   69 EX_UNAVAILABLE  a prerequisite is missing (toolchain, unit, sysuser)
+#   78 EX_CONFIG       something is configured wrong or a probe failed
+
+set -euo pipefail
+
+APP_DIR=/usr/share/rodauth-admin
+STATE_DIR=/var/lib/rodauth-admin
+RUN_DIR=/run/rodauth-admin
+CREDSTORE=/etc/credstore.encrypted
+UNIT=rodauth-admin.service
+SVC_USER=rodauth-admin
+BUNDLE=/usr/bin/bundle
+
+# The six secrets the running service holds, one per env var. The order is
+# the order `check` probes them in. ADMIN_DATABASE_URL_MIGRATIONS is not
+# here on purpose: it is never sealed onto the host.
+SEALABLE=(
+  RODAUTH_ADMIN_SESSION_SECRET
+  AUTH_SECRET
+  ARGON2_SECRET
+  ADMIN_DATABASE_URL
+  ADMIN_DATABASE_URL_RO
+  ADMIN_DATABASE_URL_VERBS
+)
+
+die_usage() { echo "rodauth-admin: $*" >&2; usage >&2; exit 64; }
+die_unavail() { echo "rodauth-admin: $*" >&2; exit 69; }
+die_config() { echo "rodauth-admin: $*" >&2; exit 78; }
+
+usage() {
+  cat <<'EOF'
+usage: rodauth-admin install-gems
+       rodauth-admin seal NAME
+       rodauth-admin check
+       rodauth-admin migrate
+       rodauth-admin rake -- TASK [ARG...]
+
+NAME is one of RODAUTH_ADMIN_SESSION_SECRET, AUTH_SECRET, ARGON2_SECRET,
+ADMIN_DATABASE_URL, ADMIN_DATABASE_URL_RO, ADMIN_DATABASE_URL_VERBS.
+See rodauth-admin(8).
+EOF
+}
+
+require_root() {
+  [[ ${EUID:-$(id -u)} -eq 0 ]] || die_unavail "must run as root (try sudo)"
+}
+
+cred_path() { echo "$CREDSTORE/rodauth-admin.$1.cred"; }
+
+is_sealable() {
+  local n=$1 s
+  for s in "${SEALABLE[@]}"; do [[ $s == "$n" ]] && return 0; done
+  return 1
+}
+
+# Shared shape for every transient unit. Absolute paths throughout: a
+# transient unit inherits systemd's PATH, not the caller's. --pty gives
+# the operator the command's output and exit status directly; with --pipe
+# alongside it, systemd-run uses the pty only when this process has a
+# terminal and passes stdio through otherwise, so a scripted or piped call
+# behaves the same. --collect drops the unit when it finishes, failed or
+# not (systemd-run(1)).
+run_args() {
+  printf '%s\n' \
+    --pty --pipe --collect \
+    --uid="$SVC_USER" --gid="$SVC_USER" \
+    -p "WorkingDirectory=$APP_DIR" \
+    -p StateDirectory=rodauth-admin \
+    -E RACK_ENV=production \
+    -E "HOME=$STATE_DIR" \
+    -E RODAUTH_ADMIN_HOST=localhost \
+    -E RODAUTH_ADMIN_BIND=127.0.0.1 \
+    -E PORT=9292
+}
+# The three non-secret settings above duplicate the unit's Environment=
+# lines on purpose: Env.validate! requires RODAUTH_ADMIN_HOST in
+# production, so `check` must boot under the same values the unit uses.
+# Keep them in step with rodauth-admin.service.
+
+# -p LoadCredentialEncrypted= x6, so a transient run sees exactly what the
+# packaged unit sees.
+sealed_cred_args() {
+  local n
+  for n in "${SEALABLE[@]}"; do
+    printf '%s\n' -p "LoadCredentialEncrypted=$n:$(cred_path "$n")"
+  done
+}
+
+# ---------------------------------------------------------------- install
+
+cmd_install_gems() {
+  require_root
+
+  # Refuse early rather than let bundler fail three minutes into a native
+  # build: argon2 (vendored libargon2), puma, nio4r, bcrypt, json and
+  # bigdecimal all compile here.
+  command -v gcc >/dev/null 2>&1 || die_unavail \
+    "gcc not found: install build-essential (native gems are compiled here)"
+  command -v make >/dev/null 2>&1 || die_unavail \
+    "make not found: install build-essential (native gems are compiled here)"
+  ruby -e 'require "rbconfig"; d = RbConfig::CONFIG["rubyhdrdir"]; exit 1 if d.to_s.empty? || !File.exist?(File.join(d, "ruby.h"))' \
+    >/dev/null 2>&1 || die_unavail \
+    "ruby headers not found (ruby.h): install ruby-dev"
+
+  [[ -d $APP_DIR ]] || die_unavail "$APP_DIR missing: is the package installed?"
+  [[ -x $BUNDLE ]] || die_unavail "$BUNDLE missing: install ruby-bundler"
+
+  # frozen / without / version come from the shipped .bundle/config, so
+  # this call, the unit's ExecStartPre and every transient unit agree.
+  cd "$APP_DIR"
+  "$BUNDLE" install
+}
+
+# ------------------------------------------------------------------- seal
+
+cmd_seal() {
+  require_root
+  local name=${1:-}
+  [[ -n $name ]] || die_usage "seal needs a credential name"
+  is_sealable "$name" || die_usage "unknown credential: $name"
+
+  command -v systemd-creds >/dev/null 2>&1 || die_unavail \
+    "systemd-creds not found (systemd >= 250 required)"
+  [[ -d $CREDSTORE ]] || die_unavail \
+    "$CREDSTORE missing: run systemd-tmpfiles --create rodauth-admin.conf"
+
+  local value
+  if [[ -t 0 ]]; then
+    # -s: never echo the value. -r: a backslash in a URL password stays a
+    # backslash.
+    read -rs -p "$name: " value
+    echo >&2
+  else
+    # Whole of stdin, trailing newline stripped by $(): `printf '%s' x |
+    # rodauth-admin seal NAME` and a heredoc both give the same value.
+    value=$(cat)
+  fi
+  [[ -n $value ]] || die_config "$name: refusing to seal an empty value"
+
+  local out
+  out=$(cred_path "$name")
+  # 0600 from creation: no window where the sealed file is world-readable.
+  umask 077
+  # printf '%s': no trailing newline, so the value the wrapper exports is
+  # byte-for-byte what was typed. --name must equal the credential id in
+  # the unit or decryption fails. --with-key=host explicitly rather than
+  # `auto`: these hosts have no vTPM, and `auto` would silently pick TPM2
+  # on a future host, making a copied credstore undecryptable
+  # (systemd-creds(1)).
+  printf '%s' "$value" \
+    | systemd-creds encrypt --with-key=host --name="$name" - "$out"
+  echo "sealed: $out"
+}
+
+# ------------------------------------------------------------------ check
+
+# Probe helpers. Every probe echoes the command it is about to run as
+# "+ cmd", then exactly one "ok: ..." or "FAIL: ..." line. The first FAIL
+# ends the run (set -e via the explicit returns below), so the output
+# always ends with the thing to fix.
+probe_ok()   { echo "ok: $*"; }
+probe_fail() { echo "FAIL: $*" >&2; exit 78; }
+
+cmd_check() {
+  require_root
+
+  echo "+ ruby -e 'print RUBY_VERSION'"
+  local rv
+  rv=$(ruby -e 'print RUBY_VERSION' 2>/dev/null) \
+    || probe_fail "ruby not runnable: install ruby (>= 1:3.3)"
+  [[ $rv == 3.3.* ]] \
+    || probe_fail "ruby $rv is not 3.3.x (the Gemfile pins ruby '~> 3.3.0')"
+  probe_ok "ruby $rv"
+
+  echo "+ getent passwd $SVC_USER"
+  getent passwd "$SVC_USER" >/dev/null \
+    || probe_fail "user $SVC_USER missing: run systemd-sysusers rodauth-admin.conf"
+  probe_ok "user $SVC_USER exists"
+
+  echo "+ test -d $STATE_DIR"
+  [[ -d $STATE_DIR ]] \
+    || probe_fail "$STATE_DIR missing: run systemd-tmpfiles --create rodauth-admin.conf"
+  probe_ok "$STATE_DIR exists"
+
+  echo "+ runuser -u $SVC_USER -- env HOME=$STATE_DIR $BUNDLE check --dry-run"
+  # As the service user, in the app dir, with the unit's HOME: the same
+  # call the unit makes in ExecStartPre, so a gem installed only for root
+  # is caught here. runuser keeps the caller's HOME (/root), which bundler
+  # cannot read as this user and would warn about.
+  ( cd "$APP_DIR" && runuser -u "$SVC_USER" -- env "HOME=$STATE_DIR" "$BUNDLE" check --dry-run ) >/dev/null 2>&1 \
+    || probe_fail "gems missing or unreadable by $SVC_USER: run rodauth-admin install-gems"
+  probe_ok "gems satisfy Gemfile.lock for $SVC_USER"
+
+  local n f
+  for n in "${SEALABLE[@]}"; do
+    f=$(cred_path "$n")
+    echo "+ systemd-creds decrypt --name=$n $f -"
+    [[ -f $f ]] || probe_fail "$f missing: run rodauth-admin seal $n"
+    systemd-creds decrypt --name="$n" "$f" - >/dev/null 2>&1 \
+      || probe_fail "$f is not decryptable on this host: re-run rodauth-admin seal $n"
+    probe_ok "$n sealed and decryptable"
+  done
+
+  echo "+ test -d /etc/systemd/system/$UNIT.d"
+  # The authdb drop-in is the per-host half of IPAddressDeny=any: without
+  # it the service cannot reach the database at all.
+  # Guarded: find on a missing directory exits 1, and under pipefail that
+  # would end the script here without the FAIL line that names the fix.
+  local dropins=0
+  if [[ -d "/etc/systemd/system/$UNIT.d" ]]; then
+    dropins=$(find "/etc/systemd/system/$UNIT.d" -maxdepth 1 -name '*.conf' | wc -l | tr -d ' ')
+  fi
+  [[ $dropins -gt 0 ]] \
+    || probe_fail "no drop-in under /etc/systemd/system/$UNIT.d: add IPAddressAllow= for the authdb (see rodauth-admin(8))"
+  probe_ok "$dropins drop-in(s) under /etc/systemd/system/$UNIT.d"
+
+  echo "+ systemd-analyze verify /usr/lib/systemd/system/$UNIT"
+  systemd-analyze verify "/usr/lib/systemd/system/$UNIT" >/dev/null 2>&1 \
+    || probe_fail "systemd-analyze verify rejected $UNIT"
+  probe_ok "$UNIT verifies"
+
+  # Last and most expensive: the app's own boot checks (schema and secret
+  # validation) under the real credentials, before systemctl start does it
+  # for real. Output is left on the terminal — a ConfigurationError message
+  # is the useful part of a failure here.
+  echo "+ systemd-run ... ruby -e 'require \"./lib/rodauth_admin\"; RodauthAdmin.boot!'"
+  local args=()
+  mapfile -t args < <(run_args; sealed_cred_args)
+  systemd-run "${args[@]}" \
+    /usr/lib/rodauth-admin/with-credentials \
+    "$BUNDLE" exec ruby -e 'require "./lib/rodauth_admin"; RodauthAdmin.boot!' \
+    || probe_fail "RodauthAdmin.boot! failed under the sealed credentials"
+  probe_ok "RodauthAdmin.boot! succeeded under the sealed credentials"
+
+  echo "ok: ready; start with systemctl start $UNIT"
+}
+
+# ---------------------------------------------------------------- migrate
+
+cmd_migrate() {
+  require_root
+  [[ -d $RUN_DIR ]] || die_unavail \
+    "$RUN_DIR missing: run systemd-tmpfiles --create rodauth-admin.conf"
+
+  local url
+  if [[ -t 0 ]]; then
+    read -rs -p "ADMIN_DATABASE_URL_MIGRATIONS: " url
+    echo >&2
+  else
+    url=$(cat)
+  fi
+  [[ -n $url ]] || die_config "ADMIN_DATABASE_URL_MIGRATIONS: empty"
+
+  # The migrator credential is never sealed: it exists for the length of
+  # one transient unit as a 0600 root file on the /run tmpfs. Not
+  # SetCredential=, which puts the value in the unit properties and so on
+  # the D-Bus wire and in `systemctl show`.
+  local src="$RUN_DIR/migrations-url"
+  # shellcheck disable=SC2064  # $src is fixed here; expand it now.
+  trap "rm -f '$src'" EXIT INT TERM
+  umask 077
+  printf '%s' "$url" > "$src"
+  unset url
+
+  # LoadCredential=, not ...Encrypted=: systemd reads the source file as
+  # root before dropping to the uid, so an unsealed 0600 file is fine.
+  local args=()
+  mapfile -t args < <(run_args)
+  systemd-run "${args[@]}" \
+    -p "LoadCredential=ADMIN_DATABASE_URL_MIGRATIONS:$src" \
+    /usr/lib/rodauth-admin/with-credentials \
+    "$BUNDLE" exec rake db:migrate
+}
+
+# ------------------------------------------------------------------- rake
+
+cmd_rake() {
+  require_root
+  [[ $# -gt 0 ]] || die_usage "rake needs a task (rodauth-admin rake -- operators:list)"
+
+  # -E USER: the Rakefile records this as the audit actor, and inside a
+  # transient unit $USER would otherwise be the service user.
+  local args=()
+  mapfile -t args < <(run_args; sealed_cred_args)
+  systemd-run "${args[@]}" \
+    -E "USER=${SUDO_USER:-${USER:-root}}" \
+    /usr/lib/rodauth-admin/with-credentials \
+    "$BUNDLE" exec rake "$@"
+}
+
+# ------------------------------------------------------------------- main
+
+cmd=${1:-}
+[[ -n $cmd ]] || { usage >&2; exit 64; }
+shift
+
+case "$cmd" in
+  install-gems) cmd_install_gems "$@" ;;
+  seal)         cmd_seal "$@" ;;
+  check)        cmd_check "$@" ;;
+  migrate)      cmd_migrate "$@" ;;
+  rake)
+    # `--` separates our options from rake's, so a task with switches
+    # (operators:add[a@b] REASON=...) survives intact.
+    [[ ${1:-} == "--" ]] || die_usage "rake args must follow --"
+    shift
+    cmd_rake "$@"
+    ;;
+  -h|--help|help) usage ;;
+  *) die_usage "unknown subcommand: $cmd" ;;
+esac
