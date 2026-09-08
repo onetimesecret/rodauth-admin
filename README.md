@@ -6,7 +6,7 @@ the ~200k-account SQL authdb that the colonel console cannot see or touch.
 
 **Status:** Phase 1 (bootstrap), Phase 2 (aggregate visibility) and Phase 3
 (account detail) done; **Phase 4 (mutations) is in progress on this branch.**
-The front door works end to end against a local authdb, the read-only stats
+Sign-in works end to end against a local authdb, the read-only stats
 board and the locked / orphaned lists are in, and so is the account detail
 page: an `/account` lookup (a POST form for typed queries, `GET /account?q=<external_id>`
 for the colonel console's deep link) and an `/accounts/<id>`
@@ -50,7 +50,7 @@ target and production grants are not yet applied.
 
 ## Ground rules (from the charter)
 
-- Own front door, shared identity: operators authenticate here directly with
+- Own sign-in, shared identity: operators authenticate here directly with
   their existing production Rodauth account. TOTP required, every session.
 - Allowlist decides who may enter. Removing the row is offboarding.
 - Own audit trail: `admin_actions`, append-only, reason required, written
@@ -89,7 +89,7 @@ lib/rodauth_admin/
 db/migrate/                  the admin tables (Sequel migrations, own bookkeeping table)
 db/grants/postgres/          the three runtime roles and every grant
 views/                       layout, stats board, account lists; Rodauth renders its own forms
-try/, spec/                  tryouts (units) and RSpec (front-door flows)
+try/, spec/                  tryouts (units) and RSpec (sign-in and screen flows)
 docs/design/                 database-credentials.md, mutations.md, quality-gates.md
 ```
 
@@ -120,7 +120,7 @@ each account's `external_id` renders as a deep link into the colonel console
 (nothing is ever requested from it).
 
 ```bash
-bundle exec rake authdb:status    # which authdb tables the door needs, and whether they exist
+bundle exec rake authdb:status    # which authdb tables the sign-in needs, and whether they exist
 bundle exec rake audit:recent     # tail admin_actions
 ```
 

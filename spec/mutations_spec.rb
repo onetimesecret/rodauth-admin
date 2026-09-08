@@ -3,7 +3,7 @@
 # frozen_string_literal: true
 
 require_relative 'spec_helper'
-require_relative 'support/front_door_helpers'
+require_relative 'support/sign_in_helpers'
 
 # Phase 4 exit criterion: an operator signs in, opens a verb's confirm page,
 # types a reason, and the row is gone AND recorded — in that order, through
@@ -11,7 +11,7 @@ require_relative 'support/front_door_helpers'
 # behaviour is covered by try/verbs_try.rb; what is tested here is the
 # request: the guards, the statuses, the flash and what reaches the page.
 RSpec.describe RodauthAdmin::App do
-  include FrontDoorHelpers
+  include SignInHelpers
 
   let(:email) { 'operator@example.com' }
   let(:password) { 'correct horse battery staple' }
@@ -362,7 +362,7 @@ RSpec.describe RodauthAdmin::App do
       expect(last_response.location).to end_with('/otp-auth')
 
       # Rodauth refuses a code from a time step it has already accepted, so
-      # backdate last_use exactly as the front-door spec does.
+      # backdate last_use exactly as the sign-in spec does.
       authdb[:account_otp_keys].where(id: account_id).update(last_use: Time.now - 120)
       form_post '/otp-auth', otp: ROTP::TOTP.new(@otp_secret).now
       expect(last_response.location).to end_with(path), 'the step-up must return to the requested page'

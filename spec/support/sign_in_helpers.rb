@@ -1,11 +1,11 @@
-# spec/support/front_door_helpers.rb
+# spec/support/sign_in_helpers.rb
 #
 # frozen_string_literal: true
 
-# Getting through the front door — sign in, complete TOTP, be allowlisted —
-# is the precondition of every screen this app has, so the steps live here
-# rather than in the spec that happens to test the door itself.
-module FrontDoorHelpers
+# Signing in — password, TOTP, allowlist — is the precondition of every
+# screen this app has, so the steps live here rather than in the spec that
+# happens to test the sign-in itself.
+module SignInHelpers
   def allowlist!(id = account_id, addr = email)
     RodauthAdmin::Allowlist.add!(account_id: id, email: addr, actor: 'spec', reason: 'test fixture')
   end
@@ -50,7 +50,7 @@ module FrontDoorHelpers
     secret
   end
 
-  # The whole door in one line, for specs that are about what is behind it.
+  # The whole sign-in in one line, for specs that are about what comes after it.
   def sign_in_operator!
     allowlist!
     login!

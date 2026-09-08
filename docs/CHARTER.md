@@ -100,7 +100,7 @@ Smallest thing that is honestly a separate product:
   delete privilege. See docs/design/database-credentials.md.] Rodauth's `db` setting
   takes its own Sequel database, so the split is one line of config, and both
   grant lists live in the repo, reviewed like code.
-- **Its own front door, the operator's existing identity:** operators sign in
+- **Its own sign-in, the operator's existing identity:** operators sign in
   to Rodauth Admin directly — a Rodauth instance of its own (it would be
   strange not to dogfood) — but with their *production* account. Operators
   are already Rodauth accounts with passwords and MFA enrolled; a second
@@ -119,7 +119,7 @@ Smallest thing that is honestly a separate product:
   identity-wise, alongside `admin_actions`. A row admits an account to the
   admin; removing the row is offboarding. Two consequences of the shared
   identity are accepted, eyes open: lockout couples both ways (five bad
-  attempts at the admin door lock the operator's tenant account too — correct
+  attempts at the admin sign-in lock the operator's tenant account too — correct
   for one identity, and network placement limits who can attempt it), and
   admin sign-ins land in the production auth-event log alongside the
   operator's tenant activity — acceptable, but the admin instance tags its

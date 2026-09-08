@@ -64,7 +64,7 @@ The boundary is exact: `SELF_REFUSED` holds the two verbs that remove or
 replace a second factor, and no others. `clear_lockout`, `force_password_reset`,
 `expire_tokens`, `revoke_sessions`, `revoke_refresh_keys` and `unlink_identity`
 stay available on an operator's account, because none of them weakens the
-admin door: clearing a lockout, expiring emailed links, revoking sessions or
+admin sign-in: clearing a lockout, expiring emailed links, revoking sessions or
 refresh keys, or unlinking an SSO identity cannot get anyone past password +
 TOTP, and the worst each can do to an operator is a nuisance the operator
 will notice. That is the line the next verb is argued against: one that

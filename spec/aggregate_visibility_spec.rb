@@ -3,7 +3,7 @@
 # frozen_string_literal: true
 
 require_relative 'spec_helper'
-require_relative 'support/front_door_helpers'
+require_relative 'support/sign_in_helpers'
 
 # Phase 2 (CHARTER §6): the stats board and the two state-filtered lists, as
 # an operator actually meets them — signed in, second factor complete,
@@ -12,7 +12,7 @@ require_relative 'support/front_door_helpers'
 # links, the pagination, the 400 on a bad filter, and that a blinking authdb
 # degrades rather than 500s.
 RSpec.describe RodauthAdmin::App do
-  include FrontDoorHelpers
+  include SignInHelpers
 
   let(:email) { 'operator@example.com' }
   let(:password) { 'correct horse battery staple' }

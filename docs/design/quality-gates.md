@@ -80,7 +80,7 @@ applies on top — the database name must match `(^|_)(test|ci|scratch)($|_)`
   than the bug class it would catch here. Revisit if the app grows past the
   point where a reader cannot hold the data shapes in their head.
 - **ERB linting.** Four views, all server-rendered, all covered by the
-  front-door specs. Revisit when the view layer grows a helper library.
+  RSpec flows. Revisit when the view layer grows a helper library.
 - **A Ruby version matrix.** The deploy target is one Ruby, pinned in
   `.ruby-version`; a matrix would test configurations nobody runs. Revisit
   when a Ruby upgrade is scheduled, and then as a temporary second lane.
