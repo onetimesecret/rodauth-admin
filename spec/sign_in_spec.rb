@@ -1,15 +1,15 @@
-# spec/front_door_spec.rb
+# spec/sign_in_spec.rb
 #
 # frozen_string_literal: true
 
 require_relative 'spec_helper'
-require_relative 'support/front_door_helpers'
+require_relative 'support/sign_in_helpers'
 
 # Phase 1 exit criterion: an operator signs in with their production account,
 # completes TOTP, is allowlisted, and gets in. Everything else
-# here is the set of doors that must stay shut.
+# here is the set of ways in that must stay shut.
 RSpec.describe RodauthAdmin::App do
-  include FrontDoorHelpers
+  include SignInHelpers
 
   let(:email) { 'operator@example.com' }
   let(:password) { 'correct horse battery staple' }
@@ -54,7 +54,7 @@ RSpec.describe RodauthAdmin::App do
     expect(actions.size).to eq(before)
   end
 
-  # Lockout is not enabled at this door (CHARTER §4, revision 5): the
+  # Lockout is not enabled on the admin instance (CHARTER §4, revision 5): the
   # counters belong to the tenant app, and a wrong password here must not
   # move the operator's production account towards a lockout.
   it 'does not count a wrong password against the shared identity' do
@@ -135,7 +135,7 @@ RSpec.describe RodauthAdmin::App do
     # password alone. This is the example that holds that true.
     get '/'
     expect(last_response).to be_redirect
-    expect(last_response.location).to end_with('/otp-auth'), 'password alone must not open the door'
+    expect(last_response.location).to end_with('/otp-auth'), 'password alone must not complete the sign-in'
     get "/accounts/#{account_id}"
     expect(last_response.location).to end_with('/otp-auth'), 'nor any other read screen'
 

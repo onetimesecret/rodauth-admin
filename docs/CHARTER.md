@@ -100,7 +100,7 @@ Smallest thing that is honestly a separate product:
   delete privilege. See docs/design/database-credentials.md.] Rodauth's `db` setting
   takes its own Sequel database, so the split is one line of config, and both
   grant lists live in the repo, reviewed like code.
-- **Its own front door, the operator's existing identity:** operators sign in
+- **Its own sign-in, the operator's existing identity:** operators sign in
   to Rodauth Admin directly — a Rodauth instance of its own (it would be
   strange not to dogfood) — but with their *production* account. Operators
   are already Rodauth accounts with passwords and MFA enrolled; a second
@@ -119,7 +119,7 @@ Smallest thing that is honestly a separate product:
   identity-wise, alongside `admin_actions`. A row admits an account to the
   admin; removing the row is offboarding. Two consequences of the shared
   identity are accepted, eyes open: lockout couples both ways (five bad
-  attempts at the admin door lock the operator's tenant account too — correct
+  attempts at the admin sign-in lock the operator's tenant account too — correct
   for one identity, and network placement limits who can attempt it), and
   admin sign-ins land in the production auth-event log alongside the
   operator's tenant activity — acceptable, but the admin instance tags its
@@ -133,7 +133,7 @@ Smallest thing that is honestly a separate product:
   one's own account) would fix it. Behind the SSH tunnel, the allowlist and
   mandatory TOTP the feature added no brute-force protection worth that;
   `audit_logging` still writes every failed attempt to production's
-  auth-event log. A bad password at this door now neither reads nor writes
+  auth-event log. A bad password at the admin sign-in now neither reads nor writes
   `account_login_failures` / `account_lockouts`; TOTP failures still count
   on the shared key row. Raised in the review of onetimesecret PR #4390.]
 - **Its own audit trail, in SQL:** an `admin_actions` table — append-only,

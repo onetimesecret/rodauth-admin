@@ -33,7 +33,7 @@ module RodauthAdmin
   # webauthn (Phase 1 keeps one second factor; revisit when an operator
   # without TOTP shows up), and lockout (CHARTER §4, revision 5). The
   # counters are the tenant's, so with lockout on here a bad password at
-  # this door counted against the operator's production account, and a
+  # the admin sign-in counted against the operator's production account, and a
   # lockout there -- five tries by anyone at the public login -- shut the
   # operator out of the one console that can clear it, mid-incident. Without
   # it, a wrong password here neither reads nor writes
