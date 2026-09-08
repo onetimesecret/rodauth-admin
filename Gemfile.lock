@@ -346,7 +346,7 @@ CHECKSUMS
   unicode-emoji (4.2.0) sha256=519e69150f75652e40bf736106cfbc8f0f73aa3fb6a65afe62fefa7f80b0f80f
 
 RUBY VERSION
-  ruby 3.4.10
+  ruby 3.3.9
 
 BUNDLED WITH
   4.0.9
