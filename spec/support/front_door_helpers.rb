@@ -11,8 +11,12 @@ module FrontDoorHelpers
   end
 
   # Roda's route_csrf plugin issues per-path tokens; a real browser gets one
-  # from the rendered form, so the specs do the same.
+  # from the rendered form, so the specs do the same. The nav's lookup form
+  # (layout.erb) carries its own token for /account on every signed-in page,
+  # and it comes first in the body, so it is cut out before the search: the
+  # token we want is the one in the page's own form.
   def hidden_field(body, name)
+    body = body.sub(%r{<nav>.*?</nav>}m, '')
     body[/name="#{name}"[^>]*value="([^"]+)"/, 1] || body[/value="([^"]+)"[^>]*name="#{name}"/, 1]
   end
 

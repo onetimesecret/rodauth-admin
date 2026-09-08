@@ -53,7 +53,8 @@
         <a href="/accounts?filter=locked">Locked</a>
         <a href="/accounts?filter=orphaned">Orphaned</a>
         <a href="<%= rodauth.logout_path %>">Sign out</a>
-        <form method="get" action="/account">
+        <form method="post" action="/account">
+          <%== csrf_tag('/account') %>
           <label for="nav-q">Email or external id</label>
           <input type="search" id="nav-q" name="q" placeholder="email or external id" aria-label="Email or external id" autocomplete="off">
         </form>

@@ -142,6 +142,7 @@ RSpec.describe RodauthAdmin::App do
       expect(last_response.body).to include('CHARTER &sect;7')
     end
 
+    # The route shape itself is pinned once, in spec/account_detail_spec.rb.
     it "deep-links the operator's own external id when the colonel console is configured" do
       allow(RodauthAdmin::Env).to receive(:colonel_console_url).and_return('https://console.example.com')
       sign_in_operator!
@@ -191,13 +192,6 @@ RSpec.describe RodauthAdmin::App do
       get '/accounts?filter=locked'
       expect(last_response.body).to include('extid-locked')
       expect(last_response.body).not_to include('/colonel/customers/')
-    end
-
-    it 'deep-links the external id when the colonel console is configured' do
-      allow(RodauthAdmin::Env).to receive(:colonel_console_url).and_return('https://console.example.com')
-      sign_in_operator!
-      get '/accounts?filter=locked'
-      expect(last_response.body).to include('href="https://console.example.com/colonel/customers/extid-locked"')
     end
 
     # external_id is authdb data. A value carrying '/' or '?' would otherwise

@@ -1,5 +1,11 @@
 <h2>Find an account</h2>
-<form method="get" action="/account">
+<% if @email_in_url %>
+  <p class="degraded">Email lookups go through this form, not the URL: an address in a query string is written to
+    browser history and to every access log between you and this process. The deep link from the colonel
+    console carries an external id only.</p>
+<% end %>
+<form method="post" action="/account">
+  <%== csrf_tag('/account') %>
   <label for="q">Email or external id</label>
   <input type="search" id="q" name="q" autocomplete="off">
   <input type="submit" value="Find">

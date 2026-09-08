@@ -8,7 +8,8 @@ the ~200k-account SQL authdb that the colonel console cannot see or touch.
 (account detail) done; **Phase 4 (mutations) is in progress on this branch.**
 The front door works end to end against a local authdb, the read-only stats
 board and the locked / orphaned lists are in, and so is the account detail
-page: a `/account?q=<email or external_id>` lookup and an `/accounts/<id>`
+page: an `/account` lookup (a POST form for typed queries, `GET /account?q=<external_id>`
+for the colonel console's deep link) and an `/accounts/<id>`
 page showing status, lockout, MFA inventory, sessions, API refresh tokens,
 pending tokens, SSO identities, password age and the paginated auth-event
 timeline. Phase 4 adds the mutation verbs on top of it — clear lockout,
