@@ -1,0 +1,40 @@
+#!/bin/sh
+# Modelled on dh_installsystemd output (debhelper 13.24
+# autoscripts/postrm-systemd: remove only daemon-reloads, no mask; purge
+# runs purge+unmask); see deb-systemd-helper(1p).
+set -e
+
+UNIT=rodauth-admin.service
+
+if [ -d /run/systemd/system ]; then
+  systemctl --system daemon-reload >/dev/null || true
+fi
+
+case "$1" in
+  purge)
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+      deb-systemd-helper purge "$UNIT" >/dev/null || true
+      deb-systemd-helper unmask "$UNIT" >/dev/null || true
+    fi
+
+    # State: HOME for bundler and nothing else the operator would miss.
+    rm -rf /var/lib/rodauth-admin
+    # tmpfs scratch; only ever non-empty during a `rodauth-admin migrate`.
+    rm -rf /run/rodauth-admin
+    # The per-host authdb drop-in. It names one host's database address
+    # and is worthless without the unit it overrides.
+    rm -rf /etc/systemd/system/rodauth-admin.service.d
+
+    # Our sealed credentials only, by exact prefix. The credstore
+    # directory itself is shared with any other package on the host and is
+    # never removed — not even when it looks empty.
+    rm -f /etc/credstore.encrypted/rodauth-admin.*.cred
+
+    # The rodauth-admin user stays: Debian practice is to leave system
+    # users behind, and files elsewhere may still be owned by that uid.
+    # Gems under /var/lib/gems stay too; `gem uninstall` is the operator's
+    # call (rodauth-admin(8) NOTES).
+    ;;
+esac
+
+exit 0

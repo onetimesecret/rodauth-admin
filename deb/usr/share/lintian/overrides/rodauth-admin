@@ -1,0 +1,15 @@
+# Lintian overrides for rodauth-admin.
+#
+# Deliberately empty. The e2e (deb/test/) runs the gate with
+# --fail-on error,warning and also checks for stale overrides, so an
+# override that stops being needed is itself a failure. Anything the gate
+# reports gets either a fix or an entry here with a justification line
+# above it, in the style of ots-backup's override file.
+#
+# Expected non-findings, recorded so the next person does not re-derive
+# them: a man page is shipped (no no-manual-page); the application files
+# under /usr/share/rodauth-admin are 0644 with no shebangs (no
+# script-not-executable); the package ships no conffiles (no
+# non-standard-file-perm on /etc); the maintainer scripts use
+# deb-systemd-helper and deb-systemd-invoke throughout and never call
+# systemctl except daemon-reload, which dh_installsystemd generates too.

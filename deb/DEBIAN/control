@@ -1,0 +1,29 @@
+Package: rodauth-admin
+Version: 0.1.0
+Section: admin
+Priority: optional
+Architecture: all
+Depends: ruby (>= 1:3.3), ruby-bundler, ruby-dev, build-essential, libssl-dev
+Maintainer: Delano Mandelbaum <delano@onetimesecret.com>
+Homepage: https://github.com/onetimesecret/rodauth-admin
+Description: Admin console for Onetime Secret operator accounts
+ A single standalone Puma process serving the Rodauth-backed admin
+ console: operator accounts with MFA, account lookup, verb codes and an
+ audit trail against the Onetime Secret auth database.
+ .
+ The service binds loopback only (127.0.0.1:9292) and is reached over an
+ SSH tunnel; IPAddressDeny=any in the unit enforces that at the kernel,
+ so the sealed database URLs must be IP literals and the authdb address
+ is allowed by a per-host drop-in.
+ .
+ The six secrets (session secret, auth and argon2 secrets, three database
+ URLs) are never written to disk in cleartext: they are sealed with
+ systemd-creds into /etc/credstore.encrypted and exported into the
+ process environment at start by a wrapper. The migration credential is
+ prompted for and never sealed onto the host.
+ .
+ Gems are installed by postinst from the shipped Gemfile.lock into the
+ system Ruby's gem directory, with argon2 and puma compiled on the host;
+ hence the build-essential and ruby-dev dependencies. Built locally,
+ delivered by scp, installed with apt install ./rodauth-admin_*.deb; no
+ apt repository.

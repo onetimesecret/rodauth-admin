@@ -1,0 +1,14 @@
+#!/bin/sh
+# See deb-systemd-invoke(1p). Upgrades ($1 = upgrade) leave the service
+# running; the new version's postinst try-restarts it.
+set -e
+
+case "$1" in
+  remove)
+    if [ -d /run/systemd/system ]; then
+      deb-systemd-invoke stop rodauth-admin.service >/dev/null || true
+    fi
+    ;;
+esac
+
+exit 0
