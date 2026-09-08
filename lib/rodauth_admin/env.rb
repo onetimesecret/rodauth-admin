@@ -83,7 +83,7 @@ module RodauthAdmin
     end
 
     # The tenant app's HMAC secret: production OTP keys are stored HMAC'd
-    # with it, so the admin door cannot verify a code without the same
+    # with it, so the admin cannot verify a code without the same
     # value. Read once, removed from ENV, required in production.
     def auth_secret
       @auth_secret ||= begin

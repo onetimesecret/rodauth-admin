@@ -8,7 +8,7 @@
 -- See docs/design/database-credentials.md.
 --
 --   rodauth_admin_app  runtime user (ADMIN_DATABASE_URL). The ONLY role the
---                      login door connects with: writes exactly what a
+--                      admin sign-in connects with: writes exactly what a
 --                      Rodauth sign-in with login + lockout + otp +
 --                      audit_logging touches, plus DML on the admin's own
 --                      tables (admin_operators, admin_actions).
@@ -121,7 +121,7 @@ GRANT USAGE ON SCHEMA public TO rodauth_admin_app, rodauth_admin_ro, rodauth_adm
 -- `REVOKE CREATE ON SCHEMA public FROM PUBLIC;` on the database.
 
 -- ============================================================================
--- rodauth_admin_app: the login door + the admin's own tables
+-- rodauth_admin_app: the sign-in + the admin's own tables
 -- ============================================================================
 
 -- Account lookup by email, status check, external_id (read only)
@@ -164,7 +164,7 @@ $$;
 GRANT SELECT, INSERT, UPDATE, DELETE ON account_login_failures, account_lockouts TO rodauth_admin_app;
 
 -- otp feature: last_use / num_failures on every successful or failed code;
--- INSERT when an operator enrols TOTP through the admin door; DELETE is
+-- INSERT when an operator enrols TOTP through the admin; DELETE is
 -- deliberately withheld (operators disable MFA in the tenant app, not here).
 GRANT SELECT, INSERT, UPDATE ON account_otp_keys TO rodauth_admin_app;
 
