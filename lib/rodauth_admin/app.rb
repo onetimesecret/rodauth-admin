@@ -135,7 +135,7 @@ module RodauthAdmin
         verb_routes(r, id)
       end
 
-      # The lookup. Two doors into one resolver:
+      # The lookup. Two routes into one resolver:
       #
       #   GET  /account?q=<external_id>  the inbound deep link from the colonel
       #                                  console. The main repo builds this URL
