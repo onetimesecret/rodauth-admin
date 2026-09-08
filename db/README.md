@@ -6,7 +6,7 @@ credentials (three runtime, one offline). The model is spelled out in
 
 | ENV | Role | Purpose |
 |---|---|---|
-| `ADMIN_DATABASE_URL` | `rodauth_admin_app` | runtime: the Rodauth login door plus the admin tables |
+| `ADMIN_DATABASE_URL` | `rodauth_admin_app` | runtime: the Rodauth sign-in plus the admin tables |
 | `ADMIN_DATABASE_URL_RO` | `rodauth_admin_ro` | runtime: every admin query, SELECT only |
 | `ADMIN_DATABASE_URL_VERBS` | `rodauth_admin_verbs` | runtime: the Phase 4 mutation verbs and their `admin_actions` row |
 | `ADMIN_DATABASE_URL_MIGRATIONS` | `ots_migrator` (existing) | offline: `rake db:migrate`, `rake authdb:dev` |
@@ -115,7 +115,7 @@ tested SQLite while claiming to prove the grants. The same rule is what makes
 
 What that proves, and nothing else does:
 
-- the grants are **sufficient** — the front-door specs sign in, enrol TOTP,
+- the grants are **sufficient** — the sign-in specs sign in, enrol TOTP,
   lock out and write `admin_actions` as `rodauth_admin_app` with no privilege
   it was not deliberately given, through the password functions rather than
   the hash table;

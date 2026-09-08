@@ -3,7 +3,7 @@
 # frozen_string_literal: true
 
 require_relative 'spec_helper'
-require_relative 'support/front_door_helpers'
+require_relative 'support/sign_in_helpers'
 
 # Phase 3 (CHARTER §6): the per-account page and the lookup that reaches it,
 # as an operator meets them. The query layer has its own tryouts; what is
@@ -12,11 +12,11 @@ require_relative 'support/front_door_helpers'
 # what never reaches the HTML: no OTP key, no recovery code, no password
 # hash, no full session id.
 RSpec.describe RodauthAdmin::App do
-  include FrontDoorHelpers
+  include SignInHelpers
 
   let(:email) { 'operator@example.com' }
   let(:password) { 'correct horse battery staple' }
-  # Referenced only through FrontDoorHelpers#allowlist!'s default argument,
+  # Referenced only through SignInHelpers#allowlist!'s default argument,
   # which the cop cannot see; without it there is no operator to sign in as.
   let!(:account_id) { create_account(email: email, password: password, external_id: 'extid-op-1') } # rubocop:disable RSpec/LetSetup
 

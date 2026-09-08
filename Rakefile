@@ -39,7 +39,7 @@ namespace :authdb do
     puts "authdb built (#{db.tables.size} tables): #{db.tables.sort.join(', ')}"
   end
 
-  desc 'Show which authdb tables the login door requires and whether they exist'
+  desc 'Show which authdb tables the admin sign-in requires and whether they exist'
   task :status do
     require_relative 'lib/rodauth_admin/auth'
     rodauth = RodauthAdmin::Auth.allocate

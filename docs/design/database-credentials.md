@@ -11,7 +11,7 @@ user for the mutations rather than widening the read-only one.
 
 | Credential | ENV | Postgres role | Used by | Can |
 |---|---|---|---|---|
-| **app** (runtime) | `ADMIN_DATABASE_URL` | `rodauth_admin_app` (new) | the Rodauth login door; allowlist and `admin_actions` writes | SELECT on accounts and statuses; INSERT/UPDATE/DELETE on exactly the tables a sign-in touches (login failures, lockouts, OTP keys, auth audit log); DML on `admin_operators`; INSERT+SELECT on `admin_actions` |
+| **app** (runtime) | `ADMIN_DATABASE_URL` | `rodauth_admin_app` (new) | the Rodauth sign-in; allowlist and `admin_actions` writes | SELECT on accounts and statuses; INSERT/UPDATE/DELETE on exactly the tables a sign-in touches (login failures, lockouts, OTP keys, auth audit log); DML on `admin_operators`; INSERT+SELECT on `admin_actions` |
 | **read-only** | `ADMIN_DATABASE_URL_RO` | `rodauth_admin_ro` (new) | every admin query, Phase 2 onward | SELECT on the CHARTER §3 capability tables and the admin tables; column-level SELECT on password history (never the hashes) |
 | **verbs** (runtime) | `ADMIN_DATABASE_URL_VERBS` | `rodauth_admin_verbs` (new, Phase 4) | the Phase 4 mutation verbs and the `admin_actions` row each commits with | SELECT on `accounts`, `account_statuses` and every table it mutates; DELETE on the lockout, failure, token, MFA, session, refresh-key and identity tables; INSERT on `account_recovery_codes`; INSERT+UPDATE on `account_password_change_times`; INSERT+SELECT on `admin_actions` |
 | **migrator** | `ADMIN_DATABASE_URL_MIGRATIONS` | `ots_migrator` (the tenant app's **existing** migration user) | `rake db:migrate`, `rake authdb:dev` | DDL. Owns every table, Rodauth's and the admin's |
@@ -34,7 +34,7 @@ they never collide with the tenant app's `schema_info`.
   matters is between *runtime DML* and *DDL*, and between *writing* and
   *reading*, and both are kept.
 - **A separate read-only user is kept, and stays read-only.** Every admin
-  screen from Phase 2 reads through it, and the login door's credential
+  screen from Phase 2 reads through it, and the sign-in's credential
   never grows.
 
 ### Phase 4 revision (2026-09-05): a third runtime credential, not a wider `_ro`
