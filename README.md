@@ -75,7 +75,7 @@ lib/rodauth_admin.rb         boot: env validation, admin schema check, app load
 lib/rodauth_admin/
   env.rb                     every ENV read; unset RACK_ENV means production
   database.rb                app / readonly / verbs / migrator connections
-  auth.rb                    the Rodauth instance (login, otp, lockout, audit_logging)
+  auth.rb                    the Rodauth instance (login, otp, audit_logging; no lockout at this door)
   app.rb                     the Roda app: healthz, rodauth routes, allowlist gate, stats board, account lists
   allowlist.rb               admin_operators reads and audited writes
   audit.rb                   admin_actions writer

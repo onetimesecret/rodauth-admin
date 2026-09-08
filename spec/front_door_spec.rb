@@ -52,7 +52,19 @@ RSpec.describe RodauthAdmin::App do
     login!(email, 'nope')
     expect(last_response.status).to eq(401)
     expect(actions.size).to eq(before)
-    expect(authdb[:account_login_failures].where(id: account_id).get(:number)).to eq(1)
+  end
+
+  # Lockout is not enabled at this door (CHARTER §4, revision 5): the
+  # counters belong to the tenant app, and a wrong password here must not
+  # move the operator's production account towards a lockout.
+  it 'does not count a wrong password against the shared identity' do
+    allowlist!
+    5.times { login!(email, 'wrong') }
+    expect(authdb[:account_login_failures].where(id: account_id).count).to eq(0)
+    expect(authdb[:account_lockouts].where(id: account_id).count).to eq(0)
+
+    messages = authdb[:account_authentication_audit_logs].where(account_id: account_id).select_map(:message)
+    expect(messages.count('rodauth-admin: login_failure')).to eq(5), 'the failures still reach the auth log'
   end
 
   it 'refuses unverified accounts even when allowlisted' do
@@ -251,12 +263,17 @@ RSpec.describe RodauthAdmin::App do
     expect(row[:user_agent].bytesize).to eq(512)
   end
 
-  it 'locks the shared identity after five bad passwords, same as the tenant app' do
+  # The other half of the same decision: a tenant-side lockout (anyone
+  # hammering the public login) must not shut the operator out of the
+  # console that clears it.
+  it 'admits an operator whose tenant account is locked out' do
     allowlist!
-    5.times { login!(email, 'wrong') }
-    expect(authdb[:account_lockouts].where(id: account_id).count).to eq(1)
+    authdb[:account_login_failures].insert(id: account_id, number: 5)
+    authdb[:account_lockouts].insert(id: account_id, key: 'k', deadline: Time.now + 3600)
     login!
-    expect(last_response.status).to eq(403)
-    expect(last_response.body).to include('locked out')
+    expect(last_response).to be_redirect
+    expect(last_response.location).not_to end_with('/login')
+    get '/otp-setup'
+    expect(last_response.status).to eq(200), 'the session was established'
   end
 end
