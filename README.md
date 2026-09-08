@@ -70,6 +70,7 @@ target and production grants are not yet applied.
 
 ```
 config.ru                    rack entry point
+config/puma.rb                the server bind; loopback both listens and relaxes the cookie
 bin/setup                    bundle install + install the git hooks
 bin/ci                       the single definition of "the checks" (lint, try, rspec, audit)
 .pre-commit-config.yaml      pre-commit hooks; pre-push runs bin/ci
@@ -111,7 +112,7 @@ at a staging copy), then allowlist it — the reason is written to `admin_action
 
 ```bash
 bundle exec rake 'operators:add[you@example.com]' REASON="bootstrap operator"
-bundle exec rackup                # http://localhost:9292
+bundle exec puma                  # http://localhost:9292 (reads config/puma.rb)
 ```
 
 Sign in, enrol TOTP when prompted, and you should see the stats board.

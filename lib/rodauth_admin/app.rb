@@ -33,7 +33,7 @@ module RodauthAdmin
            key: 'rodauth_admin.session',
            max_seconds: SESSION_MAX_SECONDS,
            max_idle_seconds: SESSION_MAX_IDLE_SECONDS,
-           cookie_options: { secure: Env.production?, httponly: true, same_site: :strict }
+           cookie_options: { secure: Env.secure_cookie?, httponly: true, same_site: :strict }
     plugin :flash
     # A CSRF failure here is almost always a form submitted after the
     # session expired (30 min idle / 8 h max), so the token no longer
