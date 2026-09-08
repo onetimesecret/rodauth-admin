@@ -157,3 +157,17 @@ full history) and `audit` (bundler-audit).
 See `.env.example`. Two values are shared with the tenant app because the
 identity is shared: `AUTH_SECRET` (OTP keys are HMAC'd with it) and
 `ARGON2_SECRET` (password pepper). Rotate them together.
+
+## Deploy
+
+`deb/` builds a Debian package for Trixie: system Ruby 3.3, gems compiled from
+the committed lockfile at install time, one systemd unit bound to loopback, and
+the six secrets sealed with `systemd-creds` rather than written to disk. It is
+delivered by `scp` and `apt install ./rodauth-admin_*.deb` — there is no apt
+repository.
+
+`deb/README.md` is the operator runbook: build, deliver, seal, migrate, check,
+start, reach it over `ssh -L`, upgrade, rotate, remove.
+[ADR-0002](docs/decisions/0002-debian-package.md) records why the package looks
+the way it does; [ADR-0001](docs/decisions/0001-standalone-process-not-a-mount.md)
+records why it is a standalone process at all.
