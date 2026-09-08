@@ -124,6 +124,18 @@ Smallest thing that is honestly a separate product:
   admin sign-ins land in the production auth-event log alongside the
   operator's tenant activity — acceptable, but the admin instance tags its
   audit messages, and `admin_actions` records sign-ins regardless.
+  [Revision 5 (2026-09-07): the first of those is withdrawn. The admin
+  instance does not enable Rodauth's `lockout` feature. The coupling ran the
+  wrong way in practice: an operator who fat-fingers a password through the
+  tunnel locks their own production account mid-incident, and — worse — a
+  tenant-side lockout, which anyone can cause at the public login, shut the
+  operator out of the one console whose `clear-lockout` verb (permitted on
+  one's own account) would fix it. Behind the SSH tunnel, the allowlist and
+  mandatory TOTP the feature added no brute-force protection worth that;
+  `audit_logging` still writes every failed attempt to production's
+  auth-event log. A bad password at the admin sign-in now neither reads nor writes
+  `account_login_failures` / `account_lockouts`; TOTP failures still count
+  on the shared key row. Raised in the review of onetimesecret PR #4390.]
 - **Its own audit trail, in SQL:** an `admin_actions` table — append-only,
   reason column from day one, trivially exportable. This is the durability
   posture the Redis-backed `ColonelAuditEvent` is still working toward (Audit

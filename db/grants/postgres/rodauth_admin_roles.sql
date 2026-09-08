@@ -9,9 +9,9 @@
 --
 --   rodauth_admin_app  runtime user (ADMIN_DATABASE_URL). The ONLY role the
 --                      admin sign-in connects with: writes exactly what a
---                      Rodauth sign-in with login + lockout + otp +
---                      audit_logging touches, plus DML on the admin's own
---                      tables (admin_operators, admin_actions).
+--                      Rodauth sign-in with login + otp + audit_logging
+--                      touches, plus DML on the admin's own tables
+--                      (admin_operators, admin_actions).
 --   rodauth_admin_ro   read-only user (ADMIN_DATABASE_URL_RO). Every admin
 --                      query. SELECT only, permanently: Phase 4 was going to
 --                      widen this role to UPDATE/DELETE and deliberately did
@@ -160,8 +160,14 @@ END
 $$;
 -- GRANT SELECT ON account_password_hashes TO rodauth_admin_app;  -- fallback only
 
--- lockout feature: failure counters and lockout rows
-GRANT SELECT, INSERT, UPDATE, DELETE ON account_login_failures, account_lockouts TO rodauth_admin_app;
+-- lockout feature: not enabled on the admin instance (CHARTER §4, revision
+-- 5, 2026-09-07), so the sign-in never reads or writes the failure counters
+-- or the lockout rows. Phase 1 granted full DML here; the REVOKE is what
+-- takes it back from a deployment that applied that version, and it is a
+-- no-op on a fresh one. rodauth_admin_verbs keeps its DELETE for the
+-- clear-lockout verb (below); rodauth_admin_ro keeps SELECT for the
+-- locked list.
+REVOKE ALL ON account_login_failures, account_lockouts FROM rodauth_admin_app;
 
 -- otp feature: last_use / num_failures on every successful or failed code;
 -- INSERT when an operator enrols TOTP through the admin; DELETE is

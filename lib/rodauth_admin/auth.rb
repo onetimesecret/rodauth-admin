@@ -24,8 +24,6 @@ module RodauthAdmin
   #                    and is recorded in admin_actions; otp-disable,
   #                    multifactor-disable and multifactor-manage are routed
   #                    off (operators disable MFA in the tenant app)
-  #   lockout          same counters as the tenant app; lockout couples both
-  #                    ways, by design
   #   audit_logging    writes production's auth-event log, tagged so the two
   #                    apps' events are distinguishable
   #
@@ -33,7 +31,16 @@ module RodauthAdmin
   # change_password, close_account, remember, active_sessions (see charter),
   # recovery_codes (the tenant app owns recovery; the admin sign-in is TOTP only),
   # webauthn (Phase 1 keeps one second factor; revisit when an operator
-  # without TOTP shows up).
+  # without TOTP shows up), and lockout (CHARTER §4, revision 5). The
+  # counters are the tenant's, so with lockout on here a bad password at
+  # the admin sign-in counted against the operator's production account, and a
+  # lockout there -- five tries by anyone at the public login -- shut the
+  # operator out of the one console that can clear it, mid-incident. Without
+  # it, a wrong password here neither reads nor writes
+  # account_login_failures / account_lockouts; the SSH tunnel, the
+  # allowlist and TOTP are the brute-force ceiling, and audit_logging still
+  # writes every failure to production's auth-event log. TOTP failures
+  # (otp_auth_failures_limit) still count on the shared key row.
   # rubocop:disable Metrics/ClassLength -- one `configure` block (the whole
   # Rodauth configuration, comments included) plus the four small session
   # helpers that read what it writes; splitting them would put the
@@ -53,7 +60,7 @@ module RodauthAdmin
     MFA_FRESH_SESSION_KEY = 'mfa_at'
 
     configure do
-      enable :login, :logout, :otp, :lockout, :audit_logging, :argon2,
+      enable :login, :logout, :otp, :audit_logging, :argon2,
              :external_identity, :table_guard
 
       # The runtime credential; the ONLY one Rodauth touches. Block form
@@ -67,8 +74,7 @@ module RodauthAdmin
       external_identity_check_columns true
 
       # --- secrets shared with the tenant app --------------------------------
-      # OTP keys (and lockout unlock keys) are HMAC'd with the tenant app's
-      # AUTH_SECRET. Env.auth_secret requires it in production and removes
+      # OTP keys are HMAC'd with the tenant app's AUTH_SECRET. Env.auth_secret requires it in production and removes
       # it from ENV once read.
       hmac_secret RodauthAdmin::Env.auth_secret
       hmac_old_secret RodauthAdmin::Env.auth_old_secret if RodauthAdmin::Env.auth_old_secret
@@ -84,16 +90,6 @@ module RodauthAdmin
       normalize_login { |login| login.to_s.unicode_normalize(:nfc).strip.downcase }
       # Only Verified accounts (status 2) may sign in.
       skip_status_checks? false
-
-      # --- lockout (mirrors tenant app) --------------------------------------
-      max_invalid_logins 5
-      # The admin never sends email. Unlock happens through the tenant
-      # app's own unlock flow (same table, same HMAC'd key) or, from Phase 4,
-      # an operator's clear-lockout verb. Both lockout routes are disabled
-      # and the mail gem is not loaded.
-      unlock_account_request_route nil
-      unlock_account_route nil
-      require_mail? false
 
       # --- TOTP --------------------------------------------------------------
       otp_issuer RodauthAdmin::Env.otp_issuer

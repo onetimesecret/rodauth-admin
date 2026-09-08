@@ -315,6 +315,23 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
       expect { app_db[:account_password_hashes].limit(1).all }
         .to raise_error(Sequel::DatabaseError, /permission denied/)
     end
+
+    # Lockout is not enabled on the admin instance (CHARTER §4, revision 5),
+    # so the sign-in role has no business with either table. The grant file
+    # REVOKEs what Phase 1 granted; this is the proof that the re-run took
+    # it back.
+    it 'cannot touch the lockout tables' do
+      fixture_id = migrator[:accounts].insert(email: 'app-lockout@example.com', status_id: 2)
+      migrator[:account_login_failures].insert(id: fixture_id, number: 1)
+
+      expect { app_db[:account_login_failures].where(id: fixture_id).all }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+      expect { app_db[:account_login_failures].where(id: fixture_id).delete }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+      expect { app_db[:account_lockouts].insert(id: fixture_id, key: 'k', deadline: Time.now + 3600) }
+        .to raise_error(Sequel::DatabaseError, /permission denied/)
+      expect(migrator[:account_login_failures].where(id: fixture_id).get(:number)).to eq(1)
+    end
   end
 
   # The grant is one of the two locks on the audit trail; the trigger is the
