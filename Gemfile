@@ -79,7 +79,7 @@ group :development do
   gem 'debug', require: false
   gem 'rackup'
   gem 'rerun', '~> 0.14'
-  gem 'rubocop', '~> 1.90.0', require: false
+  gem 'rubocop', '~> 1.91.0', require: false
   gem 'rubocop-performance', require: false
   gem 'rubocop-rspec', require: false
   gem 'rubocop-sequel', require: false
