@@ -3,6 +3,7 @@
 # frozen_string_literal: true
 
 require 'securerandom'
+require 'ipaddr'
 
 module RodauthAdmin
   # All ENV access lives here. Unset RACK_ENV is production (fail closed),
@@ -106,6 +107,35 @@ module RodauthAdmin
     # ever generated here, but Rodauth requires it to be set deliberately).
     def public_host
       presence(ENV.fetch('RODAUTH_ADMIN_HOST', nil)) || dev_default('RODAUTH_ADMIN_HOST', 'localhost')
+    end
+
+    # The address the process binds to. Single source of truth: config/puma.rb
+    # opens the socket here and +secure_cookie?+ reads the same value, so the
+    # cookie decision can never disagree with where the process is actually
+    # listening. Defaults to loopback — the ADR-0001 SSH-tunnel deployment.
+    def bind_address
+      presence(ENV.fetch('RODAUTH_ADMIN_BIND', nil)) || '127.0.0.1'
+    end
+
+    # True when the bind address is a loopback address (127.0.0.0/8, ::1) or
+    # the literal "localhost". A hostname we cannot classify, and 0.0.0.0
+    # (all interfaces, i.e. public), are not loopback: fail safe, keep Secure.
+    def loopback_bind?
+      addr = bind_address
+      return true if addr == 'localhost'
+
+      IPAddr.new(addr).loopback?
+    rescue IPAddr::InvalidAddressError
+      false
+    end
+
+    # The session cookie's Secure flag. Set in production so the cookie only
+    # rides HTTPS — except when bound to loopback, where the only client is a
+    # browser reaching http://localhost through the SSH tunnel (ADR-0001):
+    # HTTPS is not in play, and Secure would silently drop the cookie and
+    # break every sign-in. The tunnel, not TLS, provides confidentiality there.
+    def secure_cookie?
+      production? && !loopback_bind?
     end
 
     # Base URL of the tenant app's colonel console. CHARTER §4 integration
