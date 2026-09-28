@@ -31,10 +31,8 @@ RSpec.describe RodauthAdmin::App do
 
   it 'turns away a valid production account that is not allowlisted, and records it' do
     login!
-    expect(last_response).to be_redirect
-    expect(last_response.location).to end_with('/login')
-    get '/login'
-    expect(last_response.body).to include('not an operator')
+    expect(last_response.status).to eq(401)
+    expect(last_response.body).to include(RodauthAdmin::Auth::SIGN_IN_FAILED_MESSAGE)
 
     denied = actions('login_denied').last
     expect(denied[:actor]).to eq(email)
@@ -43,7 +41,36 @@ RSpec.describe RodauthAdmin::App do
 
     get '/'
     expect(last_response).to be_redirect
-    expect(last_response.location).to end_with('/login'), 'session must be torn down'
+    expect(last_response.location).to end_with('/login'), 'no session was established'
+  end
+
+  # The admin reads every production account and has no lockout, so a
+  # non-operator's password must never be checked here: otherwise /login is
+  # an unthrottled password oracle over the whole customer base. Every
+  # failure looks the same, so the form does not enumerate accounts or
+  # operators either.
+  it 'never checks a non-operator password, and fails every sign-in the same way' do
+    create_account(email: 'unverified@example.com', password: password, status_id: 1)
+    operator = create_account(email: 'op2@example.com', password: password)
+    allowlist!(operator, 'op2@example.com')
+
+    attempts = {
+      'non-operator, right password' => [email, password],
+      'non-operator, wrong password' => [email, 'wrong'],
+      'no such account' => ['nobody@example.com', password],
+      'unverified non-operator' => ['unverified@example.com', password],
+      'operator, wrong password' => ['op2@example.com', 'wrong']
+    }
+    responses = attempts.transform_values do |(login, passwd)|
+      login!(login, passwd)
+      [last_response.status, last_response.body.scan(RodauthAdmin::Auth::SIGN_IN_FAILED_MESSAGE).size]
+    end
+    expect(responses.values.uniq).to eq([[401, 1]]), responses.inspect
+
+    messages = authdb[:account_authentication_audit_logs].where(account_id: account_id).select_map(:message)
+    expect(messages).to be_empty, 'a non-operator password is never verified, so nothing reaches the auth log'
+    denied = actions('login_denied').map { |r| r[:actor] }
+    expect(denied).to eq(%w[operator@example.com operator@example.com unverified@example.com])
   end
 
   it 'rejects a wrong password without touching the admin audit trail' do
@@ -72,7 +99,7 @@ RSpec.describe RodauthAdmin::App do
     RodauthAdmin::Allowlist.add!(account_id: unverified, email: 'new@example.com', actor: 'spec', reason: 'fixture')
     before = actions.size
     login!('new@example.com')
-    expect(last_response.status).to eq(403)
+    expect(last_response.status).to eq(401)
     expect(actions.size).to eq(before)
   end
 
@@ -145,6 +172,33 @@ RSpec.describe RodauthAdmin::App do
 
     get '/'
     expect(last_response.status).to eq(200)
+  end
+
+  # With lockout off, otp_auth_failures_limit is the one brute-force
+  # ceiling left on the sign-in. It counts on the shared key row, so it is
+  # the tenant's count too.
+  it 'refuses even a correct code once the TOTP failure limit is reached' do
+    allowlist!
+    login!
+    secret = complete_otp_setup!
+    form_post '/logout'
+    authdb[:account_otp_keys].where(id: account_id).update(last_use: Time.now - 120)
+
+    login!
+    wrong = format('%06d', (ROTP::TOTP.new(secret).now.to_i + 1) % 1_000_000)
+    7.times { form_post '/otp-auth', otp: wrong }
+    expect(authdb[:account_otp_keys].where(id: account_id).get(:num_failures)).to eq(7)
+    messages = authdb[:account_authentication_audit_logs].where(account_id: account_id).select_map(:message)
+    expect(messages.count('rodauth-admin: otp_authentication_failure')).to eq(7)
+
+    before = actions('two_factor_auth').size
+    get '/otp-auth'
+    token = hidden_field(last_response.body, '_csrf')
+    post '/otp-auth', otp: ROTP::TOTP.new(secret).now, _csrf: token
+    expect(actions('two_factor_auth').size).to eq(before), 'the correct code must not complete the sign-in'
+    get '/'
+    expect(last_response).to be_redirect
+    expect(last_response.location).not_to end_with('/'), 'the session must stay partially authenticated'
   end
 
   it 'ends the session on the next request after the allowlist row is removed' do
