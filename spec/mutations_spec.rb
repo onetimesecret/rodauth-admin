@@ -383,6 +383,49 @@ RSpec.describe RodauthAdmin::App do
     end
   end
 
+  # The two branches of mfa_fresh? that moving the clock forward never
+  # reaches: a stamp from the future (a clock that jumped forward and back
+  # must not mint an unbounded window) and a stamp that is not an Integer.
+  describe 'the MFA-freshness stamp' do
+    def fresh_with?(stamp)
+      auth = RodauthAdmin::Auth.new(Struct.new(:session).new({ RodauthAdmin::Auth::MFA_FRESH_SESSION_KEY => stamp }))
+      auth.mfa_fresh?
+    end
+
+    it 'is fresh only for an Integer no older than the window and not in the future' do
+      now = Time.now.to_i
+      window = RodauthAdmin::Auth::MFA_FRESH_SECONDS
+      expect(fresh_with?(now)).to be(true)
+      expect(fresh_with?(now - window)).to be(true)
+      expect(fresh_with?(now - window - 1)).to be(false)
+      expect(fresh_with?(now + 1)).to be(false), 'a stamp from the future is stale'
+      expect(fresh_with?(nil)).to be(false)
+      expect(fresh_with?(now.to_s)).to be(false)
+      expect(fresh_with?(now.to_f)).to be(false)
+    end
+
+    it 'steps up a confirm GET and refuses a POST when the stamp is ahead of the clock' do
+      stock_target!
+      path = verb_path(target, 'clear-lockout')
+      get path
+      expect(last_response.status).to eq(200)
+      token = hidden_field(last_response.body, '_csrf')
+
+      earlier = Time.now - 60
+      allow(Time).to receive(:now).and_return(earlier)
+      post path, reason: 'clock went backwards', _csrf: token
+      expect(last_response).to be_redirect
+      expect(last_response.location).to end_with(path)
+      expect(authdb[:account_lockouts].where(id: target).count).to eq(1)
+
+      get path
+      expect(last_response).to be_redirect
+      expect(last_response.location).to end_with('/otp-auth')
+    ensure
+      allow(Time).to receive(:now).and_call_original
+    end
+  end
+
   describe 'a logged-out request' do
     it 'never reaches a verb, by GET or by POST' do
       stock_target!
