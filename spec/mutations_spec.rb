@@ -457,4 +457,80 @@ RSpec.describe RodauthAdmin::App do
       expect(last_response.body).to include('<code>account_lockouts</code></td><td>1</td>')
     end
   end
+
+  # A verb is the one place an outage is not degraded to a panel by the
+  # query layer: Verbs raises, and the web layer must answer with something
+  # truer than a generic 500.
+  describe 'a verb POST when the authdb fails under it' do
+    # Database.verbs, except that +fail_on+ raises the way a lost connection
+    # or a missing grant does.
+    def verbs_failing(error, on:)
+      failing = Class.new(SimpleDelegator) do
+        define_method(:transaction) do |*args, **opts, &blk|
+          raise error if on == :transaction
+
+          __getobj__.transaction(*args, **opts) { blk.call }
+        end
+        define_method(:[]) do |table|
+          raise error if on == table
+
+          __getobj__[table]
+        end
+      end.new(RodauthAdmin::Database.verbs)
+      allow(RodauthAdmin::Database).to receive(:verbs).and_return(failing)
+    end
+
+    def expect_failed_panel
+      expect(last_response.status).to eq(503)
+      expect(last_response.body).to include('Clear lockout did not complete')
+      expect(last_response.body).to include('either both were written or neither was')
+    end
+
+    it 'answers 503 with the failed panel when the connection is gone' do
+      stock_target!
+      verbs_failing(Sequel::DatabaseConnectionError.new('PG::ConnectionBad: connection to server lost'),
+                    on: :transaction)
+      before = actions('clear_lockout').size
+      run_verb!(target, 'clear-lockout')
+
+      expect_failed_panel
+      expect(last_response.body).to include('Sequel::DatabaseConnectionError: PG::ConnectionBad')
+      expect(actions('clear_lockout').size).to eq(before)
+      expect(authdb[:account_lockouts].where(id: target).count).to eq(1)
+    end
+
+    it 'rolls the mutation back when its audit row cannot be written' do
+      stock_target!
+      verbs_failing(Sequel::DatabaseError.new('PG::InsufficientPrivilege: permission denied for table admin_actions'),
+                    on: :admin_actions)
+      before = actions('clear_lockout').size
+      run_verb!(target, 'clear-lockout')
+
+      expect_failed_panel
+      expect(actions('clear_lockout').size).to eq(before)
+      expect(authdb[:account_lockouts].where(id: target).count).to eq(1), 'the delete must not outlive its audit row'
+      expect(authdb[:account_login_failures].where(id: target).count).to eq(1)
+    end
+  end
+
+  describe 'a confirm page when the authdb cannot be read' do
+    before do
+      down = Sequel::DatabaseConnectionError.new('PG::ConnectionBad: could not connect to server')
+      unreachable = Class.new(SimpleDelegator) do
+        define_method(:[]) { |_table| raise down }
+      end.new(RodauthAdmin::Database.readonly)
+      allow(RodauthAdmin::Database).to receive(:readonly).and_return(unreachable)
+    end
+
+    it 'shows the unavailable panel and no form' do
+      stock_target!
+      path = verb_path(target, 'clear-lockout')
+      get path
+      expect(last_response.status).to eq(200)
+      expect(last_response.body).to include('This account is unavailable')
+      expect(last_response.body).to include('PG::ConnectionBad')
+      expect(last_response.body).not_to include(%(action="#{path}"))
+      expect(last_response.body).not_to include('name="reason"')
+    end
+  end
 end

@@ -193,8 +193,23 @@ module RodauthAdmin
       verb_confirm(req, id, slug, identity_id: identity_id, refusal: NO_FACTOR_REFUSAL)
     rescue Audit::BlankReason
       verb_confirm(req, id, slug, identity_id: identity_id, refusal: BLANK_REASON_REFUSAL)
+    rescue *Database::UNAVAILABLE_ERRORS => e
+      verb_failed(id, slug, e)
     end
     # rubocop:enable Metrics/AbcSize
+
+    # The authdb failed under a verb. Not a generic 500: the operator needs
+    # to know the one thing that is true (mutation and audit row are one
+    # transaction) and where to look. And not the confirm page, whose
+    # preview would read the same failing database.
+    def verb_failed(id, slug, error)
+      RodauthAdmin.logger.error('verb failed: authdb unavailable', { account_id: id, verb: slug }, error)
+      @account_id = id
+      @copy = COPY.fetch(slug)
+      @failure = Database.failure_reason(error)
+      response.status = 503
+      view 'verb_failed'
+    end
 
     def run_verb(req, id, slug, identity_id)
       args = { id: id, actor: verb_actor(req), reason: req.params['reason'] }
