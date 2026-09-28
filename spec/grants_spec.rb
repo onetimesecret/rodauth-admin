@@ -79,14 +79,38 @@ RSpec.describe 'PostgreSQL grants' do # rubocop:disable RSpec/DescribeClass
   let(:app_db) { RodauthAdmin::Database.app }
   let(:migrator) { RodauthAdmin::Database.migrator }
 
+  # The test-postgres CI job sets RODAUTH_ADMIN_EXPECT_GRANTS=1. There a
+  # skip would be a silent pass: a ci.yml edit that dropped one of the URLs
+  # (spec_helper's ||= falls it back to the app URL) or ran the lane on
+  # SQLite would turn every example below into a pending one while the job
+  # stayed green. So where the grants are expected, a missing precondition
+  # fails instead of skipping.
+  def grants_expected? = ENV['RODAUTH_ADMIN_EXPECT_GRANTS'] == '1'
+
+  def unprovable(reason)
+    raise "RODAUTH_ADMIN_EXPECT_GRANTS=1, but #{reason}" if grants_expected?
+
+    skip reason
+  end
+
   before do
-    skip 'grants exist only on PostgreSQL' unless RodauthAdmin::Database.migrator.database_type == :postgres
+    unprovable 'grants exist only on PostgreSQL' unless RodauthAdmin::Database.migrator.database_type == :postgres
 
     distinct = [RodauthAdmin::Env.database_url,
                 RodauthAdmin::Env.database_url_ro,
                 RodauthAdmin::Env.database_url_verbs,
                 RodauthAdmin::Env.database_url_migrations].uniq.size == 4
-    skip 'the URLs are not four distinct credentials; nothing to prove' unless distinct
+    unprovable 'the URLs are not four distinct credentials; nothing to prove' unless distinct
+  end
+
+  # Four distinct URLs are not four distinct roles: two URLs can name the
+  # same user with a different host spelling. Every example below is only
+  # evidence about the role it actually connected as.
+  it 'connects each runtime credential as the role the grant file names' do
+    roles = [[app_db, 'rodauth_admin_app'], [ro, 'rodauth_admin_ro'], [verbs, 'rodauth_admin_verbs']]
+    roles.each do |db, role|
+      expect(db.get(Sequel.lit('current_user'))).to eq(role)
+    end
   end
 
   describe 'rodauth_admin_ro' do
