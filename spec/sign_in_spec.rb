@@ -61,6 +61,8 @@ RSpec.describe RodauthAdmin::App do
       'unverified non-operator' => ['unverified@example.com', password],
       'operator, wrong password' => ['op2@example.com', 'wrong']
     }
+    # admin_actions is append-only and survives between examples: deltas only.
+    denied_before = actions('login_denied').size
     responses = attempts.transform_values do |(login, passwd)|
       login!(login, passwd)
       [last_response.status, last_response.body.scan(RodauthAdmin::Auth::SIGN_IN_FAILED_MESSAGE).size]
@@ -69,7 +71,7 @@ RSpec.describe RodauthAdmin::App do
 
     messages = authdb[:account_authentication_audit_logs].where(account_id: account_id).select_map(:message)
     expect(messages).to be_empty, 'a non-operator password is never verified, so nothing reaches the auth log'
-    denied = actions('login_denied').map { |r| r[:actor] }
+    denied = actions('login_denied').drop(denied_before).map { |r| r[:actor] }
     expect(denied).to eq(%w[operator@example.com operator@example.com unverified@example.com])
   end
 
