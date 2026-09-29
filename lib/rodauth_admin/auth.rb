@@ -59,6 +59,13 @@ module RodauthAdmin
     # is also why Rodauth's own keys arrive here as strings.
     MFA_FRESH_SESSION_KEY = 'mfa_at'
 
+    # Every failed sign-in says exactly this, whatever the reason (see the
+    # allowlist gate in the configure block). It names each possibility so
+    # an operator who has not been allowlisted yet knows where to look,
+    # without saying which one applied.
+    SIGN_IN_FAILED_MESSAGE = 'Sign-in failed. Check the email and password, ' \
+                             'and that the account is an operator of Rodauth Admin.'
+
     configure do
       enable :login, :logout, :otp, :audit_logging, :argon2,
              :external_identity, :table_guard
@@ -130,12 +137,44 @@ module RodauthAdmin
 
       # --- allowlist gate + admin_actions ------------------------------------
       #
-      # after_login runs inside Rodauth's login transaction, after the
-      # session is populated. A non-allowlisted but otherwise valid login
-      # is recorded, the session is torn down, and the request ends at the
-      # login form with an explanation. Nothing about the tenant account is
-      # changed; production's audit log still gets its 'login' row, which
-      # is correct: the password was right.
+      # The allowlist is checked BEFORE the password. This instance reads
+      # every production account and has no lockout, so checking the
+      # password first made /login an unthrottled password oracle over
+      # ~200k customers: a correct guess for a non-operator came back as
+      # "not an operator", a wrong one as "invalid password". Now a
+      # non-operator's password is never verified, and every way a sign-in
+      # can fail (no such login, not an operator, unverified, wrong
+      # password) gets the same status and the same message, so the form
+      # says nothing about which emails exist or which are operators.
+      #
+      # before_login_attempt runs once account_from_login has found the row
+      # and before open_account? and password_match? (rodauth 2.47.0
+      # features/login.rb:57-84). The refusal is recorded in admin_actions,
+      # never in production's auth log: nothing was attempted against the
+      # tenant credential.
+      before_login_attempt do
+        next if RodauthAdmin::Allowlist.allowed?(account_id)
+
+        RodauthAdmin::Audit.record(
+          action: 'login_denied', actor: account[:email], actor_account_id: account_id,
+          ip: request.ip, user_agent: request.user_agent
+        )
+        throw_error_reason(:no_matching_login, no_matching_login_error_status, login_param, no_matching_login_message)
+      end
+
+      no_matching_login_message SIGN_IN_FAILED_MESSAGE
+      unverified_account_message SIGN_IN_FAILED_MESSAGE
+      # otp-setup asks for the password too and shares this message; there
+      # the operator is already signed in, so Rodauth's own wording stays.
+      invalid_password_message { current_route == :login ? SIGN_IN_FAILED_MESSAGE : 'invalid password' }
+      # Rodauth answers an unverified account with 403 and the rest with
+      # 401; one status for all of them, or the status is the oracle.
+      unopen_account_error_status 401
+
+      # The second check, kept so the gate does not rest on one hook. It
+      # fires only when the row is removed between the two checks, or on a
+      # login path added later that skips before_login_attempt: the session
+      # is torn down and the request ends at the login form.
       after_login do
         if RodauthAdmin::Allowlist.allowed?(account_id)
           RodauthAdmin::Audit.record(
@@ -149,7 +188,7 @@ module RodauthAdmin
           )
           clear_session
           set_redirect_error_status 403
-          set_redirect_error_flash 'This account is not an operator of Rodauth Admin.'
+          set_redirect_error_flash SIGN_IN_FAILED_MESSAGE
           redirect login_path
         end
       end
