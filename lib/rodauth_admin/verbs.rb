@@ -41,9 +41,10 @@ module RodauthAdmin
   #    an identity's uid is not recorded either (it is frequently an email).
   #
   # Errors, not degradation: unlike the read side, a verb on an unreachable
-  # authdb raises. The web layer catches and renders the degraded panel. A
-  # mutation that silently reports "unavailable" would be indistinguishable
-  # from one that half-ran.
+  # authdb raises. The web layer (VerbRoutes#verb_execute) catches
+  # Database::UNAVAILABLE_ERRORS and answers 503 with a panel that points
+  # the operator at the account's history. A mutation that silently reports
+  # "unavailable" would be indistinguishable from one that half-ran.
   # rubocop:disable Metrics/ModuleLength -- eight verbs, one shared transaction
   # body, and the table lists they mutate; splitting them would separate a verb
   # from the audit contract it is only correct alongside.

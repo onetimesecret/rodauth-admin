@@ -1,0 +1,21 @@
+<%#
+  A verb POST that the authdb did not answer. Rendered with a 503 by
+  VerbRoutes#verb_execute; nothing here reads the database, because the
+  database is the thing that failed.
+
+  It does not say "nothing was changed": a connection lost during COMMIT
+  leaves that unknowable from here. What is knowable is that the change and
+  its admin_actions row are one transaction, so the account's history is
+  the answer.
+%>
+<h2><%= @copy[:title] %> did not complete</h2>
+<p class="footnote">Account <code><%= @account_id %></code></p>
+
+<div class="degraded">
+  <p><strong>The authdb did not answer while this ran.</strong> The change and its admin_actions record are one
+    transaction, so either both were written or neither was. Check the account&rsquo;s history before trying again:
+    an entry there means it happened.</p>
+  <p class="footnote"><%= @failure %></p>
+</div>
+
+<p><a href="<%= account_path(@account_id) %>">&larr; back to the account</a></p>
