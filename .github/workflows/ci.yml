@@ -144,6 +144,10 @@ jobs:
       # The superuser stands in for ots_migrator: it owns the schema and is
       # the only credential that ever runs DDL.
       ADMIN_DATABASE_URL_MIGRATIONS: postgresql://postgres:ci_superuser@localhost:5432/onetime_authdb_ci
+      # spec/grants_spec.rb fails instead of skipping when its preconditions
+      # (PostgreSQL, four distinct credentials) do not hold. This is the one
+      # lane that exists to prove the grants, so a skip here is a failure.
+      RODAUTH_ADMIN_EXPECT_GRANTS: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
