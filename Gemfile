@@ -19,8 +19,8 @@ source 'https://rubygems.org/'
 # Core Application Framework
 # ====================================
 
-gem 'roda', '~> 3.0'
-gem 'rodauth', '~> 2.0'
+gem 'roda', '~> 3.108'
+gem 'rodauth', '~> 2.48'
 # table_guard (schema validation at boot), hmac_secret_guard, external_identity
 # (the accounts.external_id join column), and the Sequel migration templates
 # the local dev authdb is generated from.
@@ -79,7 +79,7 @@ group :development do
   gem 'debug', require: false
   gem 'rackup'
   gem 'rerun', '~> 0.14'
-  gem 'rubocop', '~> 1.90.0', require: false
+  gem 'rubocop', '~> 1.91.0', require: false
   gem 'rubocop-performance', require: false
   gem 'rubocop-rspec', require: false
   gem 'rubocop-sequel', require: false
